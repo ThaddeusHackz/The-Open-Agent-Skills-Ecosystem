@@ -13,9 +13,9 @@
 
 | Corpus | Skills | What it is |
 |---|---:|---|
-| `skills/skills-sh/` | **{{SKILLS_SH_COUNT}}** | Every skill indexed by [skills.sh](https://www.skills.sh/) — the open agent skills directory — as full `SKILL.md` packages, grouped `owner/repo/skill` |
-| `skills/qoder/` | **{{QODER_COUNT}}** | The entire [Qoder](https://qoder.com) skills marketplace ({{QODER_COUNT_REPORTED}}+ skills at harvest time), each as a `SKILL.md` package |
-| **Combined** | **{{COMBINED_COUNT}}** | Importable into any agent with one command |
+| `skills/skills-sh/` | **18,550** | Every skill indexed by [skills.sh](https://www.skills.sh/) — the open agent skills directory — as full `SKILL.md` packages, grouped `owner/repo/skill` |
+| `skills/qoder/` | **43,554** | The entire [Qoder](https://qoder.com) skills marketplace — 100% of its indexed catalog at harvest time — each as a `SKILL.md` package |
+| **Combined** | **62,104** | Importable into any agent with one command |
 
 Every skill is a standard agent-skill folder: a `SKILL.md` with YAML
 frontmatter (`name`, `description`) plus any small supporting files that came
