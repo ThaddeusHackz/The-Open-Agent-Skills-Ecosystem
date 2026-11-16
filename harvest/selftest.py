@@ -55,21 +55,18 @@ def t_skills_sitemap():
 
 
 def t_skills_detail_api():
-    # Public (undocumented) detail endpoint candidates.
-    candidates = [
-        "https://www.skills.sh/api/skills/vercel-labs/skills/find-skills",
-        "https://www.skills.sh/api/skill/vercel-labs/skills/find-skills",
-    ]
-    errs = []
-    for url in candidates:
-        try:
-            status, body = get(url)
-            if status == 200 and b"SKILL" in body.upper():
-                return f"{url} -> {len(body)} bytes"
-            errs.append(f"{url} status={status}")
-        except Exception as exc:  # noqa: BLE001
-            errs.append(f"{url} {exc}")
-    raise RuntimeError("; ".join(errs))
+    # v1 detail API is auth-walled (expected). We harvest content from GitHub
+    # tarballs + skill-page HTML instead, so 401/404 here is an ACCEPTED state.
+    url = "https://www.skills.sh/api/v1/skills/vercel-labs/skills/find-skills"
+    try:
+        status, body = get(url)
+        if status == 200:
+            return "public (unexpected but fine)"
+        raise RuntimeError(f"unexpected status {status}")
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403, 404):
+            return f"auth-walled ({exc.code}) — using GitHub/page fallback"
+        raise
 
 
 def t_skills_page_html():

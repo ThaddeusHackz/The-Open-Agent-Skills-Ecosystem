@@ -3,11 +3,14 @@ name: harvest
 on:
   push:
     branches: ['arena/**']
+    paths:
+      - 'harvest/**'
+      - '.github/workflows/harvest.yml'
   workflow_dispatch:
 
 concurrency:
   group: harvest-corpus
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -56,16 +59,16 @@ jobs:
         if: steps.decide.outputs.run == 'true'
         run: python3 harvest/commit_push.py
 
-      - name: Publish logs to branch
+      - name: Persist progress and logs to branch
         if: always()
         run: |
-          mkdir -p harvest-logs
           git config user.name "harvest-bot"
           git config user.email "harvest-bot@users.noreply.github.com"
-          git add harvest-logs || true
+          mkdir -p harvest-logs
+          git add harvest-logs .harvest_state skills catalog forensics 2>/dev/null || true
           if ! git diff --cached --quiet; then
-            git commit -m "chore: harvest logs [skip ci]"
-            git push origin "HEAD:${GITHUB_REF_NAME}"
+            git commit -m "harvest: persist progress [skip ci]"
+            git push origin "HEAD:${GITHUB_REF_NAME}" || echo "::warning::progress push failed"
           else
-            echo "no log changes"
+            echo "no progress changes"
           fi
