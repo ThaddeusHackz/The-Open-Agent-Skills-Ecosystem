@@ -83,21 +83,26 @@ def fetch_leaderboard() -> dict:
         batch = list(range(page, page + wave))
 
         def fetch_page(p: int):
+            # parallel() yields (item, payload, exc) — payload must be the data.
             try:
-                return p, http_get_json(LEADERBOARD.format(p), timeout=45), None
+                return http_get_json(LEADERBOARD.format(p), timeout=45)
             except Exception as exc:  # noqa: BLE001
-                return p, None, exc
+                return {"__error__": str(exc)}
 
         results = []
         for p, data, exc in parallel(batch, fetch_page, workers=wave,
                                      desc="leaderboard", script=SCRIPT,
                                      log_every=0):
-            results.append((p, data, exc))
+            if exc is not None:
+                data = {"__error__": str(exc)}
+            results.append((p, data))
         results.sort(key=lambda t: t[0])
         stop = False
-        for p, data, exc in results:
-            if exc or not data:
-                log(f"leaderboard page {p} failed: {exc}", SCRIPT)
+        for p, data in results:
+            if not isinstance(data, dict) or data.get("__error__"):
+                log(f"leaderboard page {p} failed: "
+                    f"{data.get('__error__') if isinstance(data, dict) else data}",
+                    SCRIPT)
                 stop = True
                 break
             rows = data.get("skills") or []
