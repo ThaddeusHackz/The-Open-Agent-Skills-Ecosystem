@@ -1,8 +1,8 @@
 # Forensic Scan Report — Open Agent Skills Ecosystem
 
-- **Files scanned:** 63,294 SKILL.md files (595.3 MB)
-- **With valid frontmatter:** 63,228 (99.9%)
-- **Clean files (no findings):** 60,084
+- **Files scanned:** 63,305 SKILL.md files (595.3 MB)
+- **With valid frontmatter:** 63,239 (99.9%)
+- **Clean files (no findings):** 60,095
 - **Total findings:** 4,119
 
 ## Findings by severity

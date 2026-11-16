@@ -1,7 +1,7 @@
 {
-  "scanned_files": 63294,
-  "total_bytes": 595307693,
-  "with_frontmatter": 63228,
+  "scanned_files": 63305,
+  "total_bytes": 595316401,
+  "with_frontmatter": 63239,
   "findings_total": 4119,
   "findings_by_severity": {
     "medium": 899,
@@ -38,7 +38,7 @@
     "R002": 3,
     "S002": 1
   },
-  "clean_files": 60084,
+  "clean_files": 60095,
   "duplicate_clusters": 2857,
   "duplicate_files": 6935,
   "cross_source_duplicate_clusters": 564,

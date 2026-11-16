@@ -1,12 +1,12 @@
 {
-  "generated_at": 1794862781,
+  "generated_at": 1794863391,
   "live_website": "https://www.skills.sh/",
   "totals": {
-    "skills_sh": 18539,
+    "skills_sh": 18550,
     "skills_sh_github": 18474,
-    "skills_sh_site": 65,
+    "skills_sh_site": 76,
     "qoder": 43554,
-    "combined": 62093
+    "combined": 62104
   },
   "coverage": {
     "skills_sh_repos_processed": 2306,
@@ -14,9 +14,9 @@
     "skills_sh_repos_failed_retryable": 0,
     "skills_sh_repos_failed_permanent": 50,
     "skills_sh_unresolved_skills": 1547,
-    "skills_sh_site_failed": 12,
+    "skills_sh_site_failed": 1,
     "skills_sh_site_failed_retryable": 0,
-    "skills_sh_site_failed_permanent": 12,
+    "skills_sh_site_failed_permanent": 1,
     "qoder_indexed": 43554,
     "qoder_extracted": 43554,
     "qoder_failed": 0,

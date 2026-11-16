@@ -52,3 +52,14 @@
 [20:55:16] site skills to scrape: 12
 [20:55:20] site done: 65/77 scraped
 [20:55:20] skills.sh harvest complete
+[21:07:01] https://www.skills.sh/sitemap-skills-1.xml: 10000 locs
+[21:07:02] https://www.skills.sh/sitemap-skills-2.xml: 10000 locs
+[21:07:02] sitemap universe: 20000 classifiable, 0 unparsed
+[21:07:02] leaderboard entries: 4800
+[21:07:02] union: +95 skills from leaderboard not in sitemaps
+[21:07:02] github sources: 2306 repos / 20018 skills; site sources: 77 skills
+[21:07:02] repos to fetch: 0 (already done: 2306)
+[21:07:02] github done: 2306 repos, 50 failed, 18474 skills extracted, 1547 unresolved
+[21:07:02] site skills to scrape: 11
+[21:07:05] site done: 76/77 scraped
+[21:07:05] skills.sh harvest complete
