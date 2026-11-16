@@ -1,36 +1,36 @@
 {
-  "generated_at": 1794862105,
+  "generated_at": 1794862781,
   "live_website": "https://www.skills.sh/",
   "totals": {
-    "skills_sh": 18538,
-    "skills_sh_github": 18473,
+    "skills_sh": 18539,
+    "skills_sh_github": 18474,
     "skills_sh_site": 65,
-    "qoder": 43542,
-    "combined": 62080
+    "qoder": 43554,
+    "combined": 62093
   },
   "coverage": {
-    "skills_sh_repos_processed": 2305,
+    "skills_sh_repos_processed": 2306,
     "skills_sh_repos_failed": 50,
     "skills_sh_repos_failed_retryable": 0,
     "skills_sh_repos_failed_permanent": 50,
     "skills_sh_unresolved_skills": 1547,
     "skills_sh_site_failed": 12,
-    "skills_sh_site_failed_retryable": 12,
-    "skills_sh_site_failed_permanent": 0,
+    "skills_sh_site_failed_retryable": 0,
+    "skills_sh_site_failed_permanent": 12,
     "qoder_indexed": 43554,
-    "qoder_extracted": 43542,
-    "qoder_failed": 12,
-    "qoder_failed_retryable": 12,
+    "qoder_extracted": 43554,
+    "qoder_failed": 0,
+    "qoder_failed_retryable": 0,
     "qoder_failed_permanent": 0
   },
   "qoder_top_categories": {
     "Productivity": 6240,
-    "Content Creation": 4076,
-    "Marketing & Sales": 3771,
-    "Agent Evolution": 3745,
-    "Knowledge": 3580,
-    "Design": 3506,
-    "Other": 3055,
+    "Content Creation": 4078,
+    "Marketing & Sales": 3773,
+    "Agent Evolution": 3747,
+    "Knowledge": 3583,
+    "Design": 3507,
+    "Other": 3057,
     "Database & Analytics": 3016,
     "Legal": 2784,
     "Developer Tools": 1903,
@@ -880,286 +880,7 @@
       "cx-incident-management"
     ]
   },
-  "qoder_failed_sample": [
-    {
-      "skill_id": "official_15iGv8pl",
-      "error": {
-        "version": "1.0.0",
-        "download_url": "https://qoder-skills.oss-accelerate.aliyuncs.com/public/investoday-finance-data/latest/investoday-finance-data.zip",
-        "file_tree": {
-          "name": "investoday-finance-data",
-          "path": "/",
-          "type": "directory",
-          "size": 0,
-          "children": 4
-        },
-        "category_detail": "data-ai",
-        "tags": [],
-        "updated_at": "1794810830889",
-        "file_error": "HTTP 404 for https://qoder.com/api/v1/marketplace/skills/official_15iGv8pl/files?path=%2FSKILL.md",
-        "attempts": 2
-      }
-    },
-    {
-      "skill_id": "official_Y0uTdLXd",
-      "error": {
-        "version": "1.0.0",
-        "download_url": "https://qoder-skills.oss-accelerate.aliyuncs.com/public/pdf-to-word/latest/pdf-to-word.zip",
-        "file_tree": {
-          "name": "pdf-to-word",
-          "path": "/",
-          "type": "directory",
-          "size": 0,
-          "children": 4
-        },
-        "category_detail": "content-creation",
-        "tags": [
-          "PDF转换",
-          "文档处理",
-          "自动化脚本",
-          "origin:skillatlas"
-        ],
-        "updated_at": "1794861453380",
-        "file_error": "GET failed after 4 tries: https://qoder.com/api/v1/marketplace/skills/official_Y0uTdLXd/files?path=%2FSKILL.md :: HTTP Error 500: Internal Server Error",
-        "attempts": 2
-      }
-    },
-    {
-      "skill_id": "official_nCrQ1BRN",
-      "error": {
-        "version": "1.0.0",
-        "download_url": "https://qoder-skills.oss-accelerate.aliyuncs.com/public/alvis2-academic-deep-research/latest/alvis2-academic-deep-research.zip",
-        "file_tree": {
-          "name": "alvis2-academic-deep-research",
-          "path": "/",
-          "type": "directory",
-          "size": 0,
-          "children": 2
-        },
-        "category_detail": "research-analysis",
-        "tags": [
-          "学术研究",
-          "深度分析",
-          "方法论",
-          "origin:skillatlas"
-        ],
-        "updated_at": "1793076200160",
-        "file_error": "GET failed after 4 tries: https://qoder.com/api/v1/marketplace/skills/official_nCrQ1BRN/files?path=%2FSKILL.md :: HTTP Error 500: Internal Server Error",
-        "attempts": 2
-      }
-    },
-    {
-      "skill_id": "official_lOfOTvn8",
-      "error": {
-        "version": "1.0.0",
-        "download_url": "https://qoder-skills.oss-accelerate.aliyuncs.com/public/alvis-academic-deep-research/latest/alvis-academic-deep-research.zip",
-        "file_tree": {
-          "name": "alvis-academic-deep-research",
-          "path": "/",
-          "type": "directory",
-          "size": 0,
-          "children": 2
-        },
-        "category_detail": "research-analysis",
-        "tags": [
-          "学术研究",
-          "深度分析",
-          "文献综述",
-          "origin:skillatlas"
-        ],
-        "updated_at": "1787575418241",
-        "file_error": "GET failed after 4 tries: https://qoder.com/api/v1/marketplace/skills/official_lOfOTvn8/files?path=%2FSKILL.md :: HTTP Error 500: Internal Server Error",
-        "attempts": 2
-      }
-    },
-    {
-      "skill_id": "official_2YS2gerx",
-      "error": {
-        "version": "1.0.0",
-        "download_url": "https://qoder-skills.oss-accelerate.aliyuncs.com/public/alvis2-ai-daily-briefing/latest/alvis2-ai-daily-briefing.zip",
-        "file_tree": {
-          "name": "alvis2-ai-daily-briefing",
-          "path": "/",
-          "type": "directory",
-          "size": 0,
-          "children": 2
-        },
-        "category_detail": "research-analysis",
-        "tags": [
-          "每日简报",
-          "任务管理",
-          "生产力",
-          "origin:skillatlas"
-        ],
-        "updated_at": "1787915758754",
-        "file_error": "GET failed after 4 tries: https://qoder.com/api/v1/marketplace/skills/official_2YS2gerx/files?path=%2FSKILL.md :: HTTP Error 500: Internal Server Error",
-        "attempts": 2
-      }
-    },
-    {
-      "skill_id": "official_ztkRZBp8",
-      "error": {
-        "version": "1.0.0",
-        "download_url": "https://qoder-skills.oss-accelerate.aliyuncs.com/public/daxiang-article-formatter/latest/daxiang-article-formatter.zip",
-        "file_tree": {
-          "name": "daxiang-article-formatter",
-          "path": "/",
-          "type": "directory",
-          "size": 0,
-          "children": 6
-        },
-        "category_detail": "content-creation",
-        "tags": [
-          "内容排版",
-          "自媒体运营",
-          "视觉优化",
-          "origin:skillatlas"
-        ],
-        "updated_at": "1792982292360",
-        "file_error": "GET failed after 4 tries: https://qoder.com/api/v1/marketplace/skills/official_ztkRZBp8/files?path=%2FSKILL.md :: HTTP Error 500: Internal Server Error",
-        "attempts": 2
-      }
-    },
-    {
-      "skill_id": "official_N4AvWRAV",
-      "error": {
-        "version": "1.0.0",
-        "download_url": "https://qoder-skills.oss-accelerate.aliyuncs.com/public/daxiang-memory-optimization/latest/daxiang-memory-optimization.zip",
-        "file_tree": {
-          "name": "daxiang-memory-optimization",
-          "path": "/",
-          "type": "directory",
-          "size": 0,
-          "children": 3
-        },
-        "category_detail": "devops",
-        "tags": [
-          "记忆管理",
-          "性能优化",
-          "智能检索",
-          "origin:skillatlas"
-        ],
-        "updated_at": "1794833522736",
-        "file_error": "GET failed after 4 tries: https://qoder.com/api/v1/marketplace/skills/official_N4AvWRAV/files?path=%2FSKILL.md :: HTTP Error 500: Internal Server Error",
-        "attempts": 2
-      }
-    },
-    {
-      "skill_id": "official_EVSyPdsV",
-      "error": {
-        "version": "1.0.0",
-        "download_url": "https://qoder-skills.oss-accelerate.aliyuncs.com/public/daxiang-image-prompt/latest/daxiang-image-prompt.zip",
-        "file_tree": {
-          "name": "daxiang-image-prompt",
-          "path": "/",
-          "type": "directory",
-          "size": 0,
-          "children": 2
-        },
-        "category_detail": "design-ui",
-        "tags": [
-          "AI 绘图",
-          "提示词工程",
-          "内容创作",
-          "origin:skillatlas"
-        ],
-        "updated_at": "1794833521061",
-        "file_error": "GET failed after 4 tries: https://qoder.com/api/v1/marketplace/skills/official_EVSyPdsV/files?path=%2FSKILL.md :: HTTP Error 500: Internal Server Error",
-        "attempts": 2
-      }
-    },
-    {
-      "skill_id": "official_oQTzhDmF",
-      "error": {
-        "version": "1.0.0",
-        "download_url": "https://qoder-skills.oss-accelerate.aliyuncs.com/public/daxiang-agent-dispatch/latest/daxiang-agent-dispatch.zip",
-        "file_tree": {
-          "name": "daxiang-agent-dispatch",
-          "path": "/",
-          "type": "directory",
-          "size": 0,
-          "children": 3
-        },
-        "category_detail": "devops",
-        "tags": [
-          "任务路由",
-          "多智能体协作",
-          "意图识别",
-          "origin:skillatlas"
-        ],
-        "updated_at": "1794833519358",
-        "file_error": "GET failed after 4 tries: https://qoder.com/api/v1/marketplace/skills/official_oQTzhDmF/files?path=%2FSKILL.md :: HTTP Error 500: Internal Server Error",
-        "attempts": 2
-      }
-    },
-    {
-      "skill_id": "official_gfiEoNd8",
-      "error": {
-        "version": "1.0.0",
-        "download_url": "https://qoder-skills.oss-accelerate.aliyuncs.com/public/alvis-gemini/latest/alvis-gemini.zip",
-        "file_tree": {
-          "name": "alvis-gemini",
-          "path": "/",
-          "type": "directory",
-          "size": 0,
-          "children": 2
-        },
-        "category_detail": "content-creation",
-        "tags": [
-          "人工智能",
-          "API 集成",
-          "文本生成",
-          "origin:skillatlas"
-        ],
-        "updated_at": "1783385072156",
-        "file_error": "GET failed after 4 tries: https://qoder.com/api/v1/marketplace/skills/official_gfiEoNd8/files?path=%2FSKILL.md :: HTTP Error 500: Internal Server Error",
-        "attempts": 2
-      }
-    },
-    {
-      "skill_id": "official_FpagPAcp",
-      "error": {
-        "version": "1.0.0",
-        "download_url": "https://qoder-skills.oss-accelerate.aliyuncs.com/public/alvis2-ai-image-generation/latest/alvis2-ai-image-generation.zip",
-        "file_tree": {
-          "name": "alvis2-ai-image-generation",
-          "path": "/",
-          "type": "directory",
-          "size": 0,
-          "children": 2
-        },
-        "category_detail": "content-creation",
-        "tags": [
-          "人工智能绘图",
-          "文生图",
-          "图像编辑",
-          "origin:skillatlas"
-        ],
-        "updated_at": "1783378070896",
-        "file_error": "GET failed after 4 tries: https://qoder.com/api/v1/marketplace/skills/official_FpagPAcp/files?path=%2FSKILL.md :: HTTP Error 500: Internal Server Error",
-        "attempts": 2
-      }
-    },
-    {
-      "skill_id": "official_jsnP4g3r",
-      "error": {
-        "version": "1.0.0",
-        "download_url": "https://qoder-skills.oss-accelerate.aliyuncs.com/public/skill-optimizer/latest/skill-optimizer.zip",
-        "file_tree": {
-          "name": "skill-optimizer",
-          "path": "/",
-          "type": "directory",
-          "size": 0,
-          "children": 1
-        },
-        "category_detail": "research-analysis",
-        "tags": [],
-        "updated_at": "1782302069178",
-        "file_error": "HTTP 404 for https://qoder.com/api/v1/marketplace/skills/official_jsnP4g3r/files?path=%2FSKILL.md",
-        "attempts": 2
-      }
-    }
-  ],
+  "qoder_failed_sample": [],
   "failed_repos_sample": [
     "sentry/dev",
     "degausai/wonda",

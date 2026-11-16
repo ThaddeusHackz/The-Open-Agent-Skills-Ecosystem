@@ -1,22 +1,22 @@
 {
-  "skills_sh": 18538,
-  "skills_sh_github": 18473,
+  "skills_sh": 18539,
+  "skills_sh_github": 18474,
   "skills_sh_site": 65,
-  "qoder": 43542,
-  "combined": 62080
+  "qoder": 43554,
+  "combined": 62093
 }
 {
-  "skills_sh_repos_processed": 2305,
+  "skills_sh_repos_processed": 2306,
   "skills_sh_repos_failed": 50,
   "skills_sh_repos_failed_retryable": 0,
   "skills_sh_repos_failed_permanent": 50,
   "skills_sh_unresolved_skills": 1547,
   "skills_sh_site_failed": 12,
-  "skills_sh_site_failed_retryable": 12,
-  "skills_sh_site_failed_permanent": 0,
+  "skills_sh_site_failed_retryable": 0,
+  "skills_sh_site_failed_permanent": 12,
   "qoder_indexed": 43554,
-  "qoder_extracted": 43542,
-  "qoder_failed": 12,
-  "qoder_failed_retryable": 12,
+  "qoder_extracted": 43554,
+  "qoder_failed": 0,
+  "qoder_failed_retryable": 0,
   "qoder_failed_permanent": 0
 }

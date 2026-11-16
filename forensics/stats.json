@@ -1,23 +1,23 @@
 {
-  "scanned_files": 63281,
-  "total_bytes": 595171544,
-  "with_frontmatter": 63215,
-  "findings_total": 4117,
+  "scanned_files": 63294,
+  "total_bytes": 595307693,
+  "with_frontmatter": 63228,
+  "findings_total": 4119,
   "findings_by_severity": {
     "medium": 899,
     "critical": 606,
     "low": 1794,
-    "high": 818
+    "high": 820
   },
   "files_by_worst_severity": {
     "medium": 801,
     "critical": 596,
-    "high": 723,
+    "high": 725,
     "low": 1088
   },
   "findings_by_rule": {
     "R014": 1472,
-    "R006": 720,
+    "R006": 722,
     "R001": 562,
     "R016": 288,
     "S007": 223,
@@ -38,9 +38,9 @@
     "R002": 3,
     "S002": 1
   },
-  "clean_files": 60073,
-  "duplicate_clusters": 2856,
-  "duplicate_files": 6933,
+  "clean_files": 60084,
+  "duplicate_clusters": 2857,
+  "duplicate_files": 6935,
   "cross_source_duplicate_clusters": 564,
   "top_sources": {
     "skills/skills-sh/ruvnet": 641,

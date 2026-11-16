@@ -1,16 +1,16 @@
 # Forensic Scan Report — Open Agent Skills Ecosystem
 
-- **Files scanned:** 63,281 SKILL.md files (595.2 MB)
-- **With valid frontmatter:** 63,215 (99.9%)
-- **Clean files (no findings):** 60,073
-- **Total findings:** 4,117
+- **Files scanned:** 63,294 SKILL.md files (595.3 MB)
+- **With valid frontmatter:** 63,228 (99.9%)
+- **Clean files (no findings):** 60,084
+- **Total findings:** 4,119
 
 ## Findings by severity
 
 | Severity | Findings | Files affected |
 |---|---:|---:|
 | critical | 606 | 596 |
-| high | 818 | 723 |
+| high | 820 | 725 |
 | medium | 899 | 801 |
 | low | 1,794 | 1,088 |
 
@@ -19,7 +19,7 @@
 | Rule | Hits | Severity | Description |
 |---|---:|---|---|
 | R014 | 1,472 | low | Environment credential identifier present |
-| R006 | 720 | high | Secret harvesting + outbound transfer co-occurrence |
+| R006 | 722 | high | Secret harvesting + outbound transfer co-occurrence |
 | R001 | 562 | critical | Pipe remote payload into a shell |
 | R016 | 288 | low | Unsigned remote installer reference |
 | S007 | 223 | medium | Homoglyph skill name |
@@ -87,7 +87,7 @@
 
 ## Duplicate content clusters (top)
 
-- Duplicate clusters: 2,856 (covering 6,933 files)
+- Duplicate clusters: 2,857 (covering 6,935 files)
 - Clusters spanning BOTH skills.sh and Qoder: 564
 
 | Copies | Cluster (first paths) |
