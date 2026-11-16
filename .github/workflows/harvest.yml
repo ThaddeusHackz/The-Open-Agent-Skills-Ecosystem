@@ -27,7 +27,7 @@ jobs:
           persist-credentials: true
 
       - name: Self-test endpoints from runner
-        run: python3 harvest/selftest.py
+        run: bash harvest/run_step.sh harvest/selftest.py
 
       - name: Decide
         id: decide
@@ -41,23 +41,23 @@ jobs:
 
       - name: Harvest skills.sh
         if: steps.decide.outputs.run == 'true'
-        run: python3 harvest/harvest_skills_sh.py
+        run: bash harvest/run_step.sh harvest/harvest_skills_sh.py
 
       - name: Harvest Qoder marketplace
         if: steps.decide.outputs.run == 'true'
-        run: python3 harvest/harvest_qoder.py
+        run: bash harvest/run_step.sh harvest/harvest_qoder.py
 
       - name: Forensic scan
         if: steps.decide.outputs.run == 'true'
-        run: python3 harvest/forensics.py
+        run: bash harvest/run_step.sh harvest/forensics.py
 
       - name: Build catalog
         if: steps.decide.outputs.run == 'true'
-        run: python3 harvest/build_catalog.py
+        run: bash harvest/run_step.sh harvest/build_catalog.py
 
       - name: Commit and push in batches
         if: steps.decide.outputs.run == 'true'
-        run: python3 harvest/commit_push.py
+        run: bash harvest/run_step.sh harvest/commit_push.py
 
       - name: Persist progress and logs to branch
         if: always()
@@ -65,7 +65,10 @@ jobs:
           git config user.name "harvest-bot"
           git config user.email "harvest-bot@users.noreply.github.com"
           mkdir -p harvest-logs
-          git add harvest-logs .harvest_state skills catalog forensics 2>/dev/null || true
+          # add each path separately: git add aborts on any missing pathspec
+          for p in harvest-logs .harvest_state skills catalog forensics; do
+            git add "$p" 2>/dev/null || true
+          done
           if ! git diff --cached --quiet; then
             git commit -m "harvest: persist progress [skip ci]"
             git push origin "HEAD:${GITHUB_REF_NAME}" || echo "::warning::progress push failed"

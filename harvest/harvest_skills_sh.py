@@ -75,27 +75,47 @@ def classify(loc: str) -> tuple[str, str, str] | None:
 
 
 def fetch_leaderboard() -> dict:
+    """Parallel-wave pagination: fetch pages in batches of 8 until a short page."""
     installs: dict = {}
     page = 1
+    wave = 8
     while page <= 1500:
-        try:
-            data = http_get_json(LEADERBOARD.format(page), timeout=45)
-        except Exception as exc:  # noqa: BLE001
-            log(f"leaderboard page {page} failed: {exc}", SCRIPT)
+        batch = list(range(page, page + wave))
+
+        def fetch_page(p: int):
+            try:
+                return p, http_get_json(LEADERBOARD.format(p), timeout=45), None
+            except Exception as exc:  # noqa: BLE001
+                return p, None, exc
+
+        results = []
+        for p, data, exc in parallel(batch, fetch_page, workers=wave,
+                                     desc="leaderboard", script=SCRIPT,
+                                     log_every=0):
+            results.append((p, data, exc))
+        results.sort(key=lambda t: t[0])
+        stop = False
+        for p, data, exc in results:
+            if exc or not data:
+                log(f"leaderboard page {p} failed: {exc}", SCRIPT)
+                stop = True
+                break
+            rows = data.get("skills") or []
+            for r in rows:
+                key = f"{r.get('source','')}/{r.get('skillId','')}"
+                installs[key] = {
+                    "installs": r.get("installs", 0),
+                    "weeklyInstalls": r.get("weeklyInstalls"),
+                    "isOfficial": bool(r.get("isOfficial")),
+                    "name": r.get("name"),
+                }
+            if len(rows) < 200:
+                stop = True
+                break
+        log(f"leaderboard through page {p}: {len(installs)} entries", SCRIPT)
+        if stop:
             break
-        rows = data.get("skills") or []
-        for r in rows:
-            key = f"{r.get('source','')}/{r.get('skillId','')}"
-            installs[key] = {
-                "installs": r.get("installs", 0),
-                "weeklyInstalls": r.get("weeklyInstalls"),
-                "isOfficial": bool(r.get("isOfficial")),
-                "name": r.get("name"),
-            }
-        log(f"leaderboard page {page}: {len(rows)} rows (total {len(installs)})", SCRIPT)
-        if len(rows) < 200:
-            break
-        page += 1
+        page += wave
     return installs
 
 
@@ -211,7 +231,7 @@ def harvest() -> None:
     log(f"repos to fetch: {len(repos_todo)} (already done: "
         f"{len(state['repos_done'])})", SCRIPT)
 
-    def do_repo(repo: str):
+    def do_repo(repo: str) -> dict:
         skill_ids = set(github_skills[repo])
         already = state["repos_done"].get(repo, {})
         already_ids = {e["skill_id"] for e in already.get("resolved", [])
@@ -219,7 +239,7 @@ def harvest() -> None:
         skill_ids -= already_ids
         data = repo_tarball(repo)
         if not data:
-            return repo, {"failed": True, "resolved": [], "unresolved": sorted(skill_ids)}
+            return {"failed": True, "resolved": [], "unresolved": sorted(skill_ids)}
         res = extract_skill_from_tarball(data, skill_ids)
         o, r = repo.split("/", 1)
         resolved_info = []
@@ -230,8 +250,8 @@ def harvest() -> None:
                                   "path": dest.replace(os.sep, "/"),
                                   "files": n_files, "bytes": n_bytes,
                                   "matched_via": info["matched_via"]})
-        return repo, {"failed": False, "resolved": resolved_info,
-                      "unresolved": res["unresolved"]}
+        return {"failed": False, "resolved": resolved_info,
+                "unresolved": res["unresolved"]}
 
     batch_no = 0
     for repo, result, exc in parallel(repos_todo, do_repo, workers=10,
@@ -273,14 +293,20 @@ def harvest() -> None:
     site_todo = [t for t in site_skills if site_retryable(t)]
     log(f"site skills to scrape: {len(site_todo)}", SCRIPT)
 
-    def do_site(item):
+    def do_site(item) -> dict:
         source, skill_id, loc = item
         status, html = http_get(loc, timeout=45, max_bytes=8 * 1024 * 1024)
         if status != 200:
-            return item, {"ok": False, "error": f"HTTP {status}"}
+            return {"ok": False, "error": f"HTTP {status}"}
         content, method = extract_skillmd_from_html(html)
         if not content:
-            return item, {"ok": False, "error": "no SKILL.md in page"}
+            # keep one debug sample for extraction R&D
+            dbg = os.path.join("harvest-logs", "site_extract_debug.html")
+            if not os.path.exists(dbg):
+                os.makedirs("harvest-logs", exist_ok=True)
+                with open(dbg, "wb") as fh:
+                    fh.write(html[:600000])
+            return {"ok": False, "error": "no SKILL.md in page"}
         meta, body = parse_frontmatter(content)
         if not meta:
             # synthesize frontmatter from page metadata
@@ -296,8 +322,8 @@ def harvest() -> None:
         dest = os.path.join(OUT_ROOT, "site", sanitize_dirname(source),
                             sanitize_dirname(skill_id))
         n_files, n_bytes = write_skill(dest, {"SKILL.md": content.encode()})
-        return item, {"ok": True, "path": dest.replace(os.sep, "/"),
-                      "method": method, "files": n_files, "bytes": n_bytes}
+        return {"ok": True, "path": dest.replace(os.sep, "/"),
+                "method": method, "files": n_files, "bytes": n_bytes}
 
     for item, result, exc in parallel(site_todo, do_site, workers=6,
                                       desc="skills.sh site skills", script=SCRIPT,

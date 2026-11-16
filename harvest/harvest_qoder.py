@@ -127,7 +127,7 @@ def harvest() -> None:
     todo = [it for it in items if retryable(it)]
     log(f"details to fetch: {len(todo)}", SCRIPT)
 
-    def do_skill(item: dict):
+    def do_skill(item: dict) -> dict:
         sid = item["skill_id"]
         name = item.get("skill_name") or sid
         # 1) detail endpoint (readme_content = full SKILL.md)
@@ -157,7 +157,7 @@ def harvest() -> None:
             except Exception as exc:  # noqa: BLE001
                 detail_meta["file_error"] = str(exc)
         if content is None:
-            return sid, None, detail_meta
+            return {"result": None, "meta": detail_meta}
 
         meta, _ = parse_frontmatter(content)
         if not meta.get("name") or not meta.get("description"):
@@ -179,14 +179,20 @@ def harvest() -> None:
         dest = os.path.join(OUT_ROOT,
                             f"{sanitize_dirname(sid, 40)}__{sanitize_dirname(name, 60)}")
         write_skill(dest, "SKILL.md", content.encode("utf-8"))
-        return sid, {"path": dest.replace(os.sep, "/"),
-                     "bytes": len(content.encode("utf-8")),
-                     "name": name, **detail_meta}, detail_meta
+        return {"result": {"path": dest.replace(os.sep, "/"),
+                           "bytes": len(content.encode("utf-8")),
+                           "name": name, **detail_meta},
+                "meta": detail_meta}
 
     n = 0
-    for sid, result, meta in parallel(todo, do_skill, workers=24,
-                                      desc="qoder skills", script=SCRIPT,
-                                      log_every=1000):
+    for item, payload, exc in parallel(todo, do_skill, workers=24,
+                                       desc="qoder skills", script=SCRIPT,
+                                       log_every=1000):
+        sid = item["skill_id"]
+        if exc is not None:
+            payload = {"result": None, "meta": {"error": str(exc)}}
+        result = payload.get("result")
+        meta = payload.get("meta")
         if result is None:
             prev = state["failed"].get(sid, {})
             entry = dict(meta or {})
