@@ -331,10 +331,14 @@ def html_to_markdown(fragment: str) -> str:
 def _looks_like_skill(content: str, min_len: int = 400) -> bool:
     if len(content) < min_len:
         return False
+    stripped = content.lstrip()
+    if stripped.startswith("---"):
+        return True
+    if re.match(r"^#{1,6}\s", stripped):
+        return True
     head = content[:2000]
-    return (head.lstrip().startswith("---")
-            or "\n# " in content or content.startswith("# ")
-            or "\n## " in content)
+    return ("\n# " in head or "\n## " in head
+            or re.search(r"\n#{1,6}\s", head) is not None)
 
 
 def extract_skillmd_from_html(html: bytes) -> tuple[str | None, str]:
@@ -395,9 +399,27 @@ def extract_skillmd_from_html(html: bytes) -> tuple[str | None, str]:
                 md = html_to_markdown(combined)
             else:
                 md = combined
-            if _looks_like_skill(md):
+            if _looks_like_skill(md, min_len=120):
                 return md, ("t-row+preview" if head and combined != body
                             else "t-row")
+
+    # --- Strategy B2: dangerouslySetInnerHTML blocks -----------------------
+    if stream:
+        ihs = re.findall(r'"__html":"((?:[^"\\]|\\.)*)"', stream)
+        frags = []
+        for raw in ihs:
+            try:
+                frag = json.loads('"' + raw + '"')
+            except Exception:  # noqa: BLE001
+                frag = raw
+            if len(frag) >= 120:
+                frags.append(frag)
+        frags.sort(key=len, reverse=True)  # biggest first, first gate-pass wins
+        for frag in frags:
+            md = (html_to_markdown(frag)
+                  if re.search(r"<[a-z][^>]*>", frag, re.I) else frag)
+            if _looks_like_skill(md, min_len=120):
+                return md, "innerHTML"
 
     # --- Strategy C: previewHtml alone (partial) ---------------------------
     if stream:
