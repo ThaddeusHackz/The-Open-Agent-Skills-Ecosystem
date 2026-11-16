@@ -1,0 +1,14 @@
+[19:00:35] https://www.skills.sh/sitemap-skills-1.xml: 10000 locs
+[19:00:35] https://www.skills.sh/sitemap-skills-2.xml: 10000 locs
+[19:00:35] sitemap universe: 20000 classifiable, 0 unparsed
+Traceback (most recent call last):
+  File "/home/runner/work/The-Open-Agent-Skills-Ecosystem/The-Open-Agent-Skills-Ecosystem/harvest/harvest_skills_sh.py", line 361, in <module>
+    harvest()
+    ~~~~~~~^^
+  File "/home/runner/work/The-Open-Agent-Skills-Ecosystem/The-Open-Agent-Skills-Ecosystem/harvest/harvest_skills_sh.py", line 193, in harvest
+    state["installs"] = fetch_leaderboard()
+                        ~~~~~~~~~~~~~~~~~^^
+  File "/home/runner/work/The-Open-Agent-Skills-Ecosystem/The-Open-Agent-Skills-Ecosystem/harvest/harvest_skills_sh.py", line 103, in fetch_leaderboard
+    rows = data.get("skills") or []
+           ^^^^^^^^
+AttributeError: 'tuple' object has no attribute 'get'
