@@ -259,62 +259,167 @@ def extract_skill_from_tarball(data: bytes, skill_ids: set[str]) -> dict:
 
 
 SKILLMD_RSC_RE = re.compile(r'self\.__next_f\.push\(\[1,\s*"((?:[^"\\]|\\.)*)"\]\)')
+T_ROW_RE = re.compile(rb'(?:^|\n)([0-9a-f]+):T([0-9a-f]+),')
+PREVIEW_RE = re.compile(r'"previewHtml":"((?:[^"\\]|\\.)*)"')
 
 
-def extract_skillmd_from_html(html: bytes) -> tuple[str | str | None, str]:
-    """Pull the full SKILL.md text out of a skills.sh Next.js page.
+def _flight_stream(text: str) -> str:
+    segs = SKILLMD_RSC_RE.findall(text)
+    parts = []
+    for s in segs:
+        try:
+            parts.append(json.loads('"' + s + '"'))
+        except Exception:  # noqa: BLE001
+            parts.append(s.replace('\\"', '"').replace("\\n", "\n"))
+    return "".join(parts)
 
+
+def extract_t_rows(stream: str) -> list[str]:
+    """Decode Next.js flight template rows ({id}:T{hex-bytes},{payload})."""
+    b = stream.encode("utf-8")
+    out = []
+    for m in T_ROW_RE.finditer(b):
+        try:
+            ln = int(m.group(2), 16)
+        except ValueError:
+            continue
+        if ln < 50 or ln > 4_000_000:
+            continue
+        chunk = b[m.end():m.end() + ln]
+        if len(chunk) != ln:
+            continue
+        try:
+            out.append(chunk.decode("utf-8"))
+        except UnicodeDecodeError:
+            continue
+    return out
+
+
+def html_to_markdown(fragment: str) -> str:
+    """Small HTML -> markdown converter for rendered skill previews."""
+    import html as htmllib
+    s = fragment
+    s = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", s, flags=re.S | re.I)
+    # code fences first (strip inner tags)
+    s = re.sub(
+        r"<pre[^>]*>(.*?)</pre>",
+        lambda m: "\n\n```\n"
+        + htmllib.unescape(re.sub(r"<[^>]+>", "", m.group(1))).strip("\n")
+        + "\n```\n\n",
+        s, flags=re.S | re.I)
+    s = re.sub(r"</?code[^>]*>", "`", s, flags=re.I)
+    s = re.sub(r"<h([1-6])[^>]*>",
+               lambda m: "\n\n" + "#" * int(m.group(1)) + " ", s, flags=re.I)
+    s = re.sub(r"</h[1-6]>", "\n\n", s, flags=re.I)
+    s = re.sub(r"<li[^>]*>", "\n- ", s, flags=re.I)
+    s = re.sub(r"</(p|div|section|article|tr|blockquote|ul|ol)>", "\n\n", s,
+               flags=re.I)
+    s = re.sub(r"<br\s*/?>", "\n", s, flags=re.I)
+    s = re.sub(r"<blockquote[^>]*>", "\n> ", s, flags=re.I)
+    s = re.sub(
+        r"<a\s[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>",
+        lambda m: f"[{re.sub(r'<[^>]+>', '', m.group(2)).strip()}]({m.group(1)})",
+        s, flags=re.S | re.I)
+    s = re.sub(r"<img[^>]*src=\"([^\"]+)\"[^>]*>", r"![](\1)", s, flags=re.I)
+    s = re.sub(r"<[^>]+>", "", s)
+    s = htmllib.unescape(s)
+    s = re.sub(r"[ \t]+\n", "\n", s)
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    return s.strip()
+
+
+def _looks_like_skill(content: str) -> bool:
+    if len(content) < 400:
+        return False
+    head = content[:2000]
+    return (head.lstrip().startswith("---")
+            or "\n# " in content or content.startswith("# ")
+            or "\n## " in content)
+
+
+def extract_skillmd_from_html(html: bytes) -> tuple[str | None, str]:
+    """Pull SKILL.md content out of a skills.sh Next.js page.
+
+    Strategies (in order):
+      rsc-stream      raw markdown between the SKILL.md marker and Show more
+      t-row(+preview) flight template rows (full rendered doc) merged with
+                      the previewHtml head, converted to markdown
+      preview-partial previewHtml only (may be truncated — flagged)
+      pre-block       literal <pre> block containing markdown
     Returns (content_or_None, method).
     """
     text = html.decode("utf-8", errors="replace")
+    stream = _flight_stream(text)
 
-    # Strategy A: concatenate Next.js flight-data segments and slice the
-    # region between the "SKILL.md" section marker and the "Show more" control.
-    segs = SKILLMD_RSC_RE.findall(text)
-    if segs:
-        stream_parts = []
-        for s in segs:
-            try:
-                stream_parts.append(json.loads('"' + s + '"'))
-            except Exception:  # noqa: BLE001
-                stream_parts.append(s.replace('\\"', '"').replace("\\n", "\n"))
-        stream = "".join(stream_parts)
+    # --- Strategy A: raw markdown region ----------------------------------
+    if stream:
         idx = stream.find("Show more")
         if idx == -1:
             idx = stream.find("Related skills")
         if idx != -1:
             region = stream[:idx]
-            # last section marker named SKILL.md before the content end
             markers = [m.start() for m in re.finditer(r"SKILL\.md", region)]
             for start in reversed(markers):
                 chunk = region[start + len("SKILL.md"):]
-                # content starts at first newline after marker
                 nl = chunk.find("\n")
                 if nl == -1:
                     continue
                 body = chunk[nl + 1:]
                 if body.lstrip().startswith("---"):
                     end = body.find("\n---", 3)
-                    if end != -1:
-                        candidate = body[:end + 4].lstrip("\n") + body[end + 4:]
-                    else:
-                        candidate = body
+                    candidate = (body[:end + 4] + body[end + 4:]) if end != -1 else body
                 else:
                     candidate = body
                 candidate = candidate.strip("\x00")
-                if len(candidate) >= 200 and ("\n# " in candidate or candidate.startswith("#")):
+                if _looks_like_skill(candidate):
                     return candidate, "rsc-stream"
-        # Fallback inside stream: grab from first H1 after last 'SKILL.md'
-        m = re.search(r"SKILL\.md.{0,400}?(---\nname:.*?|#\s+\S.*)", stream, re.DOTALL)
-        if m and len(m.group(1)) >= 200:
-            return m.group(1), "rsc-regex"
 
-    # Strategy B: raw HTML body region.
-    m = re.search(r"SKILL\.md.*?<pre[^>]*>(.*?)</pre>", text, re.DOTALL)
+    # --- Strategy B: flight template rows + preview head -------------------
+    if stream:
+        rows = [r for r in extract_t_rows(stream) if len(r) >= 300]
+        if rows:
+            body = max(rows, key=len)
+            pv_m = PREVIEW_RE.search(stream)
+            head = ""
+            if pv_m:
+                try:
+                    head = json.loads('"' + pv_m.group(1) + '"')
+                except Exception:  # noqa: BLE001
+                    head = pv_m.group(1)
+            combined = body
+            if head and len(head) >= 80:
+                probe = re.sub(r"<[^>]+>", "", head)[:120].strip().lower()
+                if probe and probe[:80] not in re.sub(r"<[^>]+>", "", body).lower():
+                    combined = head + "\n" + body
+            if re.search(r"<(h1|h2|p|pre|ul|blockquote)\b", combined, re.I):
+                md = html_to_markdown(combined)
+            else:
+                md = combined
+            if _looks_like_skill(md):
+                return md, ("t-row+preview" if head and combined != body
+                            else "t-row")
+
+    # --- Strategy C: previewHtml alone (partial) ---------------------------
+    if stream:
+        pv_m = PREVIEW_RE.search(stream)
+        if pv_m:
+            try:
+                pv = json.loads('"' + pv_m.group(1) + '"')
+            except Exception:  # noqa: BLE001
+                pv = pv_m.group(1)
+            md = (html_to_markdown(pv)
+                  if re.search(r"<[a-z]", pv, re.I) else pv)
+            if len(md) >= 200:
+                return md, "preview-partial"
+
+    # --- Strategy D: literal <pre> block in raw HTML -----------------------
+    m = re.search(r"SKILL\.md.*?<pre[^>]*>(.*?)</pre>", text, re.S | re.I)
     if m:
         import html as htmllib
         body = htmllib.unescape(m.group(1))
-        if len(body) >= 200:
+        if re.search(r"<[a-z][^>]*>", body, re.I):
+            body = html_to_markdown(body)
+        if _looks_like_skill(body):
             return body, "pre-block"
 
     return None, "none"
