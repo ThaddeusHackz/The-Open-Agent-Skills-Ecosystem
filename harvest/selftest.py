@@ -17,6 +17,9 @@ def get(url, timeout=30, headers=None):
 
 
 LOG_LINES = []
+import os
+os.makedirs("harvest-logs", exist_ok=True)
+LOG_PATH = "harvest-logs/selftest.txt"
 
 
 def check(name, fn):
@@ -27,8 +30,14 @@ def check(name, fn):
         import traceback
         FAILURES.append(name)
         line = f"FAIL  {name} :: {exc}\n{traceback.format_exc()}"
+        # Surface immediately via annotation (readable through the REST API).
+        first = str(exc).splitlines()[0] if str(exc) else repr(exc)
+        print(f"::error title=selftest::{name} failed: {first}")
     print(line)
     LOG_LINES.append(line)
+    with open(LOG_PATH, "a") as fh:
+        fh.write(line + "\n")
+        fh.flush()
 
 
 def t_skills_leaderboard():
@@ -101,11 +110,6 @@ def main():
     check("qoder catalog index", t_qoder_index)
     check("qoder skill detail", t_qoder_detail)
     check("codeload.github.com tarballs", t_codeload)
-
-    import os
-    os.makedirs("harvest-logs", exist_ok=True)
-    with open("harvest-logs/selftest.txt", "w") as fh:
-        fh.write("\n".join(LOG_LINES) + "\n")
 
     if FAILURES:
         print(f"\n{len(FAILURES)} endpoint(s) failed: {', '.join(FAILURES)}")
