@@ -1,0 +1,54 @@
+name: harvest
+
+on:
+  push:
+    branches: ['arena/**']
+  workflow_dispatch:
+
+concurrency:
+  group: harvest-corpus
+  cancel-in-progress: false
+
+jobs:
+  harvest:
+    if: ${{ !contains(github.event.head_commit.message || '', '[skip ci]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Self-test endpoints from runner
+        run: python3 harvest/selftest.py
+
+      - name: Decide
+        id: decide
+        run: |
+          if [ -f .harvest_state/COMPLETE ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Corpus already complete — skipping."
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Harvest skills.sh
+        if: steps.decide.outputs.run == 'true'
+        run: python3 harvest/harvest_skills_sh.py
+
+      - name: Harvest Qoder marketplace
+        if: steps.decide.outputs.run == 'true'
+        run: python3 harvest/harvest_qoder.py
+
+      - name: Forensic scan
+        if: steps.decide.outputs.run == 'true'
+        run: python3 harvest/forensics.py
+
+      - name: Build catalog
+        if: steps.decide.outputs.run == 'true'
+        run: python3 harvest/build_catalog.py
+
+      - name: Commit and push in batches
+        if: steps.decide.outputs.run == 'true'
+        run: python3 harvest/commit_push.py
