@@ -1,21 +1,21 @@
 {
-  "generated_at": 1794860378,
+  "generated_at": 1794862105,
   "live_website": "https://www.skills.sh/",
   "totals": {
-    "skills_sh": 18500,
-    "skills_sh_github": 18471,
-    "skills_sh_site": 29,
+    "skills_sh": 18538,
+    "skills_sh_github": 18473,
+    "skills_sh_site": 65,
     "qoder": 43542,
-    "combined": 62042
+    "combined": 62080
   },
   "coverage": {
-    "skills_sh_repos_processed": 2303,
+    "skills_sh_repos_processed": 2305,
     "skills_sh_repos_failed": 50,
-    "skills_sh_repos_failed_retryable": 50,
-    "skills_sh_repos_failed_permanent": 0,
+    "skills_sh_repos_failed_retryable": 0,
+    "skills_sh_repos_failed_permanent": 50,
     "skills_sh_unresolved_skills": 1547,
-    "skills_sh_site_failed": 48,
-    "skills_sh_site_failed_retryable": 48,
+    "skills_sh_site_failed": 12,
+    "skills_sh_site_failed_retryable": 12,
     "skills_sh_site_failed_permanent": 0,
     "qoder_indexed": 43554,
     "qoder_extracted": 43542,
@@ -897,7 +897,7 @@
         "tags": [],
         "updated_at": "1794810830889",
         "file_error": "HTTP 404 for https://qoder.com/api/v1/marketplace/skills/official_15iGv8pl/files?path=%2FSKILL.md",
-        "attempts": 1
+        "attempts": 2
       }
     },
     {
@@ -919,9 +919,9 @@
           "自动化脚本",
           "origin:skillatlas"
         ],
-        "updated_at": "1794840422758",
+        "updated_at": "1794861453380",
         "file_error": "GET failed after 4 tries: https://qoder.com/api/v1/marketplace/skills/official_Y0uTdLXd/files?path=%2FSKILL.md :: HTTP Error 500: Internal Server Error",
-        "attempts": 1
+        "attempts": 2
       }
     },
     {
@@ -945,7 +945,7 @@
         ],
         "updated_at": "1793076200160",
         "file_error": "GET failed after 4 tries: https://qoder.com/api/v1/marketplace/skills/official_nCrQ1BRN/files?path=%2FSKILL.md :: HTTP Error 500: Internal Server Error",
-        "attempts": 1
+        "attempts": 2
       }
     },
     {
@@ -969,7 +969,7 @@
         ],
         "updated_at": "1787575418241",
         "file_error": "GET failed after 4 tries: https://qoder.com/api/v1/marketplace/skills/official_lOfOTvn8/files?path=%2FSKILL.md :: HTTP Error 500: Internal Server Error",
-        "attempts": 1
+        "attempts": 2
       }
     },
     {
@@ -993,7 +993,7 @@
         ],
         "updated_at": "1787915758754",
         "file_error": "GET failed after 4 tries: https://qoder.com/api/v1/marketplace/skills/official_2YS2gerx/files?path=%2FSKILL.md :: HTTP Error 500: Internal Server Error",
-        "attempts": 1
+        "attempts": 2
       }
     },
     {
@@ -1017,7 +1017,7 @@
         ],
         "updated_at": "1792982292360",
         "file_error": "GET failed after 4 tries: https://qoder.com/api/v1/marketplace/skills/official_ztkRZBp8/files?path=%2FSKILL.md :: HTTP Error 500: Internal Server Error",
-        "attempts": 1
+        "attempts": 2
       }
     },
     {
@@ -1041,7 +1041,7 @@
         ],
         "updated_at": "1794833522736",
         "file_error": "GET failed after 4 tries: https://qoder.com/api/v1/marketplace/skills/official_N4AvWRAV/files?path=%2FSKILL.md :: HTTP Error 500: Internal Server Error",
-        "attempts": 1
+        "attempts": 2
       }
     },
     {
@@ -1065,7 +1065,7 @@
         ],
         "updated_at": "1794833521061",
         "file_error": "GET failed after 4 tries: https://qoder.com/api/v1/marketplace/skills/official_EVSyPdsV/files?path=%2FSKILL.md :: HTTP Error 500: Internal Server Error",
-        "attempts": 1
+        "attempts": 2
       }
     },
     {
@@ -1089,7 +1089,7 @@
         ],
         "updated_at": "1794833519358",
         "file_error": "GET failed after 4 tries: https://qoder.com/api/v1/marketplace/skills/official_oQTzhDmF/files?path=%2FSKILL.md :: HTTP Error 500: Internal Server Error",
-        "attempts": 1
+        "attempts": 2
       }
     },
     {
@@ -1113,7 +1113,7 @@
         ],
         "updated_at": "1783385072156",
         "file_error": "GET failed after 4 tries: https://qoder.com/api/v1/marketplace/skills/official_gfiEoNd8/files?path=%2FSKILL.md :: HTTP Error 500: Internal Server Error",
-        "attempts": 1
+        "attempts": 2
       }
     },
     {
@@ -1137,7 +1137,7 @@
         ],
         "updated_at": "1783378070896",
         "file_error": "GET failed after 4 tries: https://qoder.com/api/v1/marketplace/skills/official_FpagPAcp/files?path=%2FSKILL.md :: HTTP Error 500: Internal Server Error",
-        "attempts": 1
+        "attempts": 2
       }
     },
     {
@@ -1156,7 +1156,7 @@
         "tags": [],
         "updated_at": "1782302069178",
         "file_error": "HTTP 404 for https://qoder.com/api/v1/marketplace/skills/official_jsnP4g3r/files?path=%2FSKILL.md",
-        "attempts": 1
+        "attempts": 2
       }
     }
   ],

@@ -62,3 +62,6 @@
 [20:15:25] qoder skills: 42000/43554 done
 [20:16:19] qoder skills: 43000/43554 done
 [20:16:50] qoder harvest: 43542 ok, 12 failed of 43554 indexed
+[20:42:28] index loaded: 43554 skills; done so far: 43542
+[20:42:28] details to fetch: 12
+[20:42:43] qoder harvest: 43542 ok, 12 failed of 43554 indexed

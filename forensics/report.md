@@ -1,30 +1,30 @@
 # Forensic Scan Report — Open Agent Skills Ecosystem
 
-- **Files scanned:** 63,244 SKILL.md files (594.7 MB)
-- **With valid frontmatter:** 63,178 (99.9%)
-- **Clean files (no findings):** 60,039
-- **Total findings:** 4,112
+- **Files scanned:** 63,281 SKILL.md files (595.2 MB)
+- **With valid frontmatter:** 63,215 (99.9%)
+- **Clean files (no findings):** 60,073
+- **Total findings:** 4,117
 
 ## Findings by severity
 
 | Severity | Findings | Files affected |
 |---|---:|---:|
-| critical | 605 | 595 |
-| high | 816 | 722 |
-| medium | 898 | 800 |
-| low | 1,793 | 1,088 |
+| critical | 606 | 596 |
+| high | 818 | 723 |
+| medium | 899 | 801 |
+| low | 1,794 | 1,088 |
 
 ## Findings by rule
 
 | Rule | Hits | Severity | Description |
 |---|---:|---|---|
-| R014 | 1,471 | low | Environment credential identifier present |
-| R006 | 718 | high | Secret harvesting + outbound transfer co-occurrence |
-| R001 | 561 | critical | Pipe remote payload into a shell |
+| R014 | 1,472 | low | Environment credential identifier present |
+| R006 | 720 | high | Secret harvesting + outbound transfer co-occurrence |
+| R001 | 562 | critical | Pipe remote payload into a shell |
 | R016 | 288 | low | Unsigned remote installer reference |
 | S007 | 223 | medium | Homoglyph skill name |
 | R011 | 212 | medium | Zero-width / invisible characters in content |
-| R008 | 139 | medium | Prompt-injection phrasing (instruction override) |
+| R008 | 140 | medium | Prompt-injection phrasing (instruction override) |
 | R015 | 118 | medium | Privilege escalation request |
 | R005 | 79 | high | Webhook / request-catcher exfiltration endpoint |
 | S005 | 66 | medium | Suspiciously short body (truncation?) |
@@ -87,7 +87,7 @@
 
 ## Duplicate content clusters (top)
 
-- Duplicate clusters: 2,857 (covering 6,935 files)
+- Duplicate clusters: 2,856 (covering 6,933 files)
 - Clusters spanning BOTH skills.sh and Qoder: 564
 
 | Copies | Cluster (first paths) |

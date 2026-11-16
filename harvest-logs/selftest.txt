@@ -14,3 +14,11 @@ PASS  skills.sh page embeds full SKILL.md :: full content embedded (83300B html,
 PASS  qoder catalog index :: total_size=43554 last_page=872 items=50
 PASS  qoder skill detail :: readme=7072B download_url=yes
 PASS  codeload.github.com tarballs :: 448409 bytes tarball
+PASS  skills.sh leaderboard API :: 200 rows on page 1
+PASS  skills.sh sitemap :: 10000 urls in sitemap-skills-1
+PASS  skills.sh detail API :: auth-walled (401) — using GitHub/page fallback
+PASS  skills.sh skill page html :: 83300 bytes html
+PASS  skills.sh page embeds full SKILL.md :: full content embedded (83300B html, matched 1 form(s))
+PASS  qoder catalog index :: total_size=43554 last_page=872 items=50
+PASS  qoder skill detail :: readme=7072B download_url=yes
+PASS  codeload.github.com tarballs :: 448409 bytes tarball

@@ -29,3 +29,15 @@
 [19:19:44] site skills to scrape: 77
 [19:19:48] site done: 29/77 scraped
 [19:19:48] skills.sh harvest complete
+[20:36:52] https://www.skills.sh/sitemap-skills-1.xml: 10000 locs
+[20:36:52] https://www.skills.sh/sitemap-skills-2.xml: 10000 locs
+[20:36:52] sitemap universe: 20000 classifiable, 0 unparsed
+[20:36:52] leaderboard entries: 4800
+[20:36:52] union: +95 skills from leaderboard not in sitemaps
+[20:36:52] github sources: 2305 repos / 20018 skills; site sources: 77 skills
+[20:36:52] repos to fetch: 52 (already done: 2303)
+[20:42:24] clone fallback failed gmh5225/awesome-game-security: Command '['git', 'clone', '--depth', '1', '--quiet', 'https://github.com/gmh5225/awesome-game-security.git', '/tmp/repo-139k5mpk/x']' timed out after 180 seconds
+[20:42:24] github done: 2305 repos, 50 failed, 18473 skills extracted, 1547 unresolved
+[20:42:24] site skills to scrape: 77
+[20:42:27] site done: 65/77 scraped
+[20:42:27] skills.sh harvest complete

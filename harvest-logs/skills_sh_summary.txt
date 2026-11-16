@@ -1,8 +1,8 @@
 sitemap universe: 20095
-github repos: 2303 (failed: 50)
-github skills extracted: 18471
+github repos: 2305 (failed: 50)
+github skills extracted: 18473
 github skills unresolved: 1547
-site skills scraped: 29/77
+site skills scraped: 65/77
 leaderboard entries: 4800
 unresolved detail:
 {
