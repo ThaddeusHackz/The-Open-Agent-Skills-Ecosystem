@@ -16,13 +16,19 @@ def get(url, timeout=30, headers=None):
         return resp.status, resp.read()
 
 
+LOG_LINES = []
+
+
 def check(name, fn):
     try:
         detail = fn()
-        print(f"PASS  {name} :: {detail}")
+        line = f"PASS  {name} :: {detail}"
     except Exception as exc:  # noqa: BLE001
+        import traceback
         FAILURES.append(name)
-        print(f"FAIL  {name} :: {exc}")
+        line = f"FAIL  {name} :: {exc}\n{traceback.format_exc()}"
+    print(line)
+    LOG_LINES.append(line)
 
 
 def t_skills_leaderboard():
@@ -95,6 +101,11 @@ def main():
     check("qoder catalog index", t_qoder_index)
     check("qoder skill detail", t_qoder_detail)
     check("codeload.github.com tarballs", t_codeload)
+
+    import os
+    os.makedirs("harvest-logs", exist_ok=True)
+    with open("harvest-logs/selftest.txt", "w") as fh:
+        fh.write("\n".join(LOG_LINES) + "\n")
 
     if FAILURES:
         print(f"\n{len(FAILURES)} endpoint(s) failed: {', '.join(FAILURES)}")
