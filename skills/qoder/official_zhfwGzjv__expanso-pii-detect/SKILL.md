@@ -1,0 +1,40 @@
+---
+name: expanso-pii-detect
+description: 检测文本中的个人身份信息（PII），支持通过 CLI、MCP 服务器或部署到 Expanso Cloud 运行。
+---
+
+# pii-detect
+
+Detect personally identifiable information (PII) in text
+
+## Requirements
+
+- Expanso Edge installed (`expanso-edge` binary in PATH)
+- Install via: `clawhub install expanso-edge`
+
+## Usage
+
+### CLI Pipeline
+```bash
+# Run standalone
+echo '<input>' | expanso-edge run pipeline-cli.yaml
+```
+
+### MCP Pipeline
+```bash
+# Start as MCP server
+expanso-edge run pipeline-mcp.yaml
+```
+
+### Deploy to Expanso Cloud
+```bash
+expanso-cli job deploy https://skills.expanso.io/pii-detect/pipeline-cli.yaml
+```
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `skill.yaml` | Skill metadata (inputs, outputs, credentials) |
+| `pipeline-cli.yaml` | Standalone CLI pipeline |
+| `pipeline-mcp.yaml` | MCP server pipeline |

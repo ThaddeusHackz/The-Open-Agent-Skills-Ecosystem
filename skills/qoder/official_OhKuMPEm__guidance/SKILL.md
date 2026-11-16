@@ -1,0 +1,208 @@
+---
+name: guidance
+description: Add, edit, or audit guidance docs in this project's .claude/guidance/ directory following moflo's universal guidance rules. Default mode walks the user through one doc (creating or improving it); the -a flag audits every doc in the directory and offers per-file improvements.
+arguments: "[-a] <topic-or-path>"
+---
+
+# /guidance — Author and audit project guidance
+
+Help the user write, edit, or audit guidance files in their `.claude/guidance/` directory so Claude actually follows the rules they wrote. The skill applies the universal rules from `.claude/guidance/moflo-guidance-rules.md` — that doc is the single source of truth, do not paraphrase or duplicate it here.
+
+**Arguments:** $ARGUMENTS
+
+## Modes
+
+| Mode | Trigger | What it does |
+|------|---------|--------------|
+| Single-doc | no flag, optional `<topic-or-path>` arg | Walk the user through creating one new doc OR improving one existing doc |
+| Audit | `-a` flag | Two passes over `.claude/guidance/`: (1) **structural audit** scoring each existing doc against the universal rules, (2) **gap analysis** scanning the codebase to identify high-leverage topics that *should* have a guidance doc but don't. Both feed one combined triage report. |
+
+## Step 0 — Memory First
+
+Before reading any files, run a memory search:
+
+```
+mcp__moflo__memory_search { query: "guidance rules writing project conventions", namespace: "guidance" }
+```
+
+This pulls the user's project-specific guidance conventions (if any) plus the moflo universal rules into context. The memory-first gate will block file reads otherwise.
+
+## Step 1 — Pick the Mode and Target
+
+Parse the argument:
+
+| Input | Mode | Target |
+|-------|------|--------|
+| empty | single-doc | Ask the user for a topic; default destination is `.claude/guidance/<kebab-topic>.md` |
+| `<topic>` (no slash) | single-doc | Use `.claude/guidance/<kebab-topic>.md`; if it exists, edit; else create |
+| `<path>` (has `.claude/guidance/`) | single-doc | Edit that exact file; if it doesn't exist, create at that path |
+| `-a` | audit | All `.md` files under `.claude/guidance/` recursively |
+| `-a <subdir>` | audit | All `.md` files under `.claude/guidance/<subdir>/` recursively |
+
+If single-doc and the file already exists, briefly summarize what it contains (one sentence) before walking the user through edits — confirm you have the right file.
+
+## Step 2 — Single-Doc Mode
+
+Apply the universal rules from `.claude/guidance/moflo-guidance-rules.md`. The rules cover (do not paraphrase — read the source):
+
+1. Lead with `**Purpose:**` line after the H1
+2. Be imperative, not descriptive
+3. Use tables for decision logic
+4. Code examples must be concrete
+5. Keep files under 500 lines
+6. Headings must be specific
+7. Avoid the listed anti-patterns
+8. Optimize for RAG chunking
+9. End with a `## See Also` section
+
+### Creating a new doc — scaffold this shape
+
+```markdown
+# <Specific Title — what this doc is and when to use>
+
+**Purpose:** <one sentence on what this doc covers and when to reference it>
+
+---
+
+## <Specific H2 — first actionable rule or topic>
+
+<Imperative rule, then rationale, then example.>
+
+---
+
+## <Specific H2 — second>
+
+<Same shape.>
+
+---
+
+## See Also
+
+- `.claude/guidance/<related-doc>.md` — One-line description of why related
+- `.claude/guidance/<another>.md` — One-line description
+```
+
+After scaffolding, ask the user 2–4 targeted questions to populate the body — never auto-write opinionated content into the user's project. Their guidance must reflect their conventions, not Claude's.
+
+### Editing an existing doc — checklist before proposing changes
+
+For the loaded file, evaluate against the universal rules and report findings as a short table BEFORE editing:
+
+| Check | Status |
+|-------|--------|
+| Has `**Purpose:**` line right after H1 | yes / no |
+| Has `## See Also` section at end | yes / no |
+| Under 500 lines | <count> lines |
+| H2 headings are specific (not "Overview", "Configuration", "Examples") | list any generic ones |
+| Uses imperative voice for rules ("must"/"always"/"never") not hedged ("should"/"might"/"consider") | list hedged phrases found |
+| Has prose preamble before first rule | yes / no |
+
+Then propose edits as concrete diffs — never rewrite the whole file unless the user asks.
+
+## Step 3 — Audit Mode (`-a`)
+
+Audit mode runs **two passes**, then merges them into one triage report. Both passes are mandatory — never skip one to save tokens. The user typed `-a` because they want both signals.
+
+### 3a. Structural audit (existing-doc rule conformance)
+
+Scan the guidance directory and score each `.md` against the universal rules. Walk the directory yourself with `Glob` and `Read`; do not delegate to a subagent for the audit itself unless the user has 30+ files.
+
+**Skip moflo-managed synced files first.** Read the first ~5 lines of every candidate file and check for an auto-generated marker matching `<!-- AUTO-GENERATED by (moflo|flo-setup)`. Files with that marker are mirrored from `node_modules/moflo/.claude/guidance/shipped/` on every session start — any audit-driven edit gets silently clobbered next session, so they MUST NOT enter the per-file scoring or appear in the fix triage.
+
+Aggregate skipped files into a single rollup line in the report (count only, not actionable). Format:
+
+```
+moflo-managed synced files: <N> skipped (auto-generated; rule violations belong upstream — file an issue against the moflo package)
+```
+
+Then for each remaining (user-authored) `.md` file:
+
+1. Count lines (`wc -l` via Bash, or read + split)
+2. Check for `**Purpose:**` line right after H1
+3. Check for `## See Also` (Title Case, capital A) at end
+4. Look for generic headings: `^## (Overview|Configuration|Examples|Rules|Notes|Details|Information)$`
+5. Look for hedged language: `\b(should|might|consider|may want to)\b` in rule contexts
+6. Detect prose preambles (>3 paragraphs between H1 and first H2 rule)
+
+Render a sortable table with one row per file, columns: file, lines, has-purpose, has-see-also, generic-headings count, hedged count. Highlight the worst offenders first.
+
+**Note on `**Purpose:**` and `## See Also` regex:** ripgrep / Grep tool treats `**` as a glob escape and may return zero matches even when the markers are present. Use a plain string check (`Select-String` on Windows, `grep -F` elsewhere) or read the file and string-match in JS — never trust a zero count from a wildcard-ambiguous pattern without spot-checking one file.
+
+### 3b. Gap analysis (what topics are missing)
+
+Now look at *what isn't there*. Scan the codebase for high-leverage areas that lack a corresponding guidance doc, so Claude has nothing to follow when working in those areas.
+
+**Detection sources** (read each that exists):
+
+| Signal | What to learn |
+|--------|---------------|
+| `package.json` deps + devDeps | Frameworks/libraries the project relies on (React, Drizzle, Vitest, etc.) |
+| `pyproject.toml` / `requirements.txt` / `Cargo.toml` / `go.mod` / `Gemfile` | Same idea, other ecosystems |
+| Top-level source layout (`src/**`, `bin/**`, `scripts/**`, etc.) | Architectural concerns (e.g. a `daemon/` directory implies daemon architecture is a concern) |
+| `.claude/helpers/`, `.claude/scripts/`, `.claude/hooks/` | Hook + helper authoring is in scope |
+| MCP tool source (`mcp-tools/**`, `mcp-server/**`) | MCP tool authoring |
+| Test directories | Testing conventions (load-bearing if specific patterns exist — e.g. golden-file tests, snapshot conventions) |
+| `.github/workflows/` | CI/CD conventions |
+| Recent `git log` for files repeatedly edited together | Cross-cutting concerns that need explicit guidance |
+
+**Cross-reference:** for each detected concern, grep the existing `.claude/guidance/` corpus for keyword coverage. A topic is a **gap** if (a) the concern shows up in code (not just transitive deps) and (b) no existing guidance doc names it in the title or first H2.
+
+**Severity table:**
+
+| Concern type | Severity if unmatched |
+|--------------|------------------------|
+| Direct dep used pervasively (>10 files import it) | warn |
+| Architectural directory with >5 files | warn |
+| Direct dep used in 1–10 files | info |
+| Helper/hook/MCP authoring surface with custom code | warn |
+| CI/CD workflows beyond the standard ones | info |
+| Cross-cutting concern from git-history co-change | info |
+
+**Render gaps as a separate table** with columns: detected concern, evidence (file count or representative path), suggested doc filename, severity. Lead with the warns.
+
+**Don't auto-write any new doc.** Surface the gap, name the concern, propose a filename — then ask the user which gaps (if any) they want to fill. The single-doc mode (Step 2) handles authoring once they pick.
+
+### 3c. Combined triage and fixes
+
+After both 3a and 3b, list the **top 3–5 priority items** across both passes in plain English. Mix them — a structural fix to an existing doc and a missing-doc gap can both make the top list. For each, explain WHY (rule citation for structural; concern + evidence for gaps) and propose either a per-file fix (3a) or a per-doc authoring flow (3b).
+
+Ask the user which to apply, then walk through chosen items one at a time. **Never apply audit fixes without explicit per-file confirmation** — guidance is high-leverage; silent edits are dangerous. **Never auto-create gap docs** — every new doc starts as a single-doc mode session with the user.
+
+## Step 4 — After Editing
+
+Once the user confirms the doc looks right:
+
+1. Save the file via `Write` (new) or `Edit` (existing).
+2. If you added a new doc, ask the user which existing doc should link to it via See Also (rule #9 needs bidirectional links to work).
+3. Suggest re-indexing if the user runs moflo: `node bin/index-guidance.mjs` (or just wait for next session-start auto-reindex).
+
+## Cheatsheet — Universal Rules Recap
+
+The full rules live in `.claude/guidance/moflo-guidance-rules.md`. Quick recap:
+
+| # | Rule | One-line |
+|---|------|----------|
+| 1 | Structure for scanability | Purpose line + specific H2s + rule-first ordering |
+| 2 | Imperative voice | "Must" / "always" / "never", not "should" / "might" |
+| 3 | Tables for decisions | Conditional logic in tables, not nested bullets |
+| 4 | Concrete examples | Realistic values, not `[placeholder]` |
+| 5 | <500 lines | Split by concern when over |
+| 6 | Specific headings | Not "Overview" / "Configuration" |
+| 7 | Anti-patterns | Single source of truth, no preambles, prose for rules (not code comments) |
+| 8 | RAG chunking | 5–30 lines per H2, self-contained openings, `---` between sections |
+| 9 | See Also | Title Case, end of every file, relative paths |
+
+## Important
+
+- **Memory-first is mandatory.** Always run `mcp__moflo__memory_search` in step 0 — the gate blocks reads otherwise.
+- **Never duplicate the rules in this skill.** Reference `.claude/guidance/moflo-guidance-rules.md` and ask the user to read it if they want depth.
+- **Never auto-write opinionated content.** Guidance is the user's project policy; ask before injecting your own opinions.
+- **Confirm per file in audit mode.** Bulk edits to the user's guidance directory are high-blast-radius — confirm each one.
+- **The `moflo-` filename prefix is moflo-only.** Consumer projects writing their own guidance do not need it; it exists to avoid collisions when moflo's shipped guidance syncs into a consumer's directory.
+
+## See Also
+
+- `.claude/guidance/moflo-guidance-rules.md` — Universal writing rules this skill enforces
+- `.claude/guidance/moflo-memory-strategy.md` — How well-written guidance feeds the RAG index
+- `.claude/guidance/moflo-task-icons.md` — UX rule the skill checks for any TaskCreate examples in the user's guidance
+- `.claude/guidance/moflo-user-facing-language.md` — Companion rule for any user-visible text the user's guidance discusses

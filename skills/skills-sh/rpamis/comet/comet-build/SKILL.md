@@ -1,0 +1,35 @@
+---
+name: comet-build
+description: 'Plan, implement, and accept Classic tasks. Use when the user invokes /comet-build or Classic Runtime enters Build or returns to Build for repairs.'
+---
+
+# Comet Phase 3: Plan and Build
+
+On first entering a phase, handing off to a new Agent, or restoring context, read and follow [Task Context and Artifact Language](../comet-classic/reference/scripts.md#task-context-and-artifact-language). Prefer the current continuation or claimed Action's `contextRequest`; do not retrieve repeatedly during uninterrupted work in the same phase.
+
+After entry returns layout, follow the [shared phase entry](../comet-classic/reference/scripts.md#shared-phase-entry) when receiving a phase for the first time or when its binding changes. Reuse the valid [layout](../comet-classic/reference/classic-layout.md); do not run an extra root show first. When edits require judgement, load edit continuation through the shared entry.
+
+## SDK Run path
+
+First follow [ordinary commands and checks](../comet/reference/platform-execution.md). New and upgraded Runs use platform tools and submit actual reports to the original Run. Automatic upgrades do not restore old check executors. Phase preparation, user choices, task completion, and acceptance requirements remain in force.
+
+On first entering the current SDK phase, handing off to a new Agent, or restoring context, read [phase entry and recovery](../comet-classic/reference/sdk-methods.md#phase-entry-and-recovery) and the current phase's section in that reference. Reuse them when already available and still valid in this session. Continue with the phase below; recovery routes based on `nextAction.kind` apply only to older responses without a continuation mode.
+
+Reuse the current valid result's `agent.continuation` / `data.nextAction` and bound state. Run `comet state next <change-name> --json` only on a cold resume, after external state changes, or when necessary information is missing. For `data.runtimeFormat: sdk`, advance only this Run; the implementation methods, plan content, and reviews are in SDK execution methods; submit state and evidence through this section. `data.phase` must be `build`. Reuse valid layout and configuration already in context; use `comet state check <change-name> build --json` only when they are missing. For `nextAction.kind: reconcile`, run `comet state check <change-name> build --recover --json` and establish the original outcome before repeating external work.
+
+First check `workflow` in the valid configuration or the current `nextAction.stepId`. For `tweak.build.*` / `workflow: tweak`, **Immediately execute:** Use the Skill tool to load the comet-tweak skill. Skipping this step is prohibited. For `hotfix.build.*` / `workflow: hotfix`, **Immediately execute:** Use the Skill tool to load the comet-hotfix skill. Skipping this step is prohibited. After the skill loads, pass the same change, workspace, phase, Run revision, and continuation and resume its SDK Build step. Do not require a full Design Doc or implementation plan, or repeat Open. Older Runs may still store `comet-build` as the raw Action reference; route them the same way. After an approved upgrade, use the full path in SDK execution methods when the current step is `full.build.*`.
+
+1. At `full.build.configure`, present values, meanings, and confirmation status under [Build configuration guidance](../comet-classic/reference/sdk-methods.md#build). Ask only for missing, invalid, or explicitly changed decisions about execution, TDD, and review. Put confirmed `build_mode`, `tdd_mode`, `review_mode`, `subagent_dispatch`, and, when required, `direct_override` in a temporary JSON file inside the repository. If the user already explicitly chose this complete configuration, run `comet state propose-build <change-name> --file <configuration-json> --confirmed` to save proposal and approval together. Otherwise run `comet state propose-build <change-name> --file <configuration-json>`. Only for a remaining pending Wait, save `data.wait.proposalHash`, show the actual configuration, and await confirmation under decision-point.md. Then run `comet state decide-build <change-name> --proposal-hash <proposalHash> --choice <approved|rejected>`. Propose revised choices after rejection. Reuse an existing pending Wait on recovery without asking again or creating another configuration Action. After saving approval, briefly echo the result and continue without another confirmation to proceed.
+2. At `full.build.plan`, create or inspect the plan under SDK execution methods. Refer to the current Design Doc and tasks.md, mapping tasks with `<!-- comet-task-authority: <classic-task-authority-ref> -->` and `<!-- comet-task-ref:<task-id> -->`, not another checkbox list. Run `comet state submit-plan <change-name> --plan <plan-ref>`. Add `--pause` only if the user explicitly requested a pause after planning. For a `plan-ready` Wait, await an explicit instruction to proceed and use its current hash in `comet state continue-plan <change-name> --proposal-hash <proposalHash>`. Do not reuse approval after plan or task requirements change.
+3. At `full.build.execute`, implement using the chosen method, review tasks or segments, and run relevant checks. Check off the same tasks.md only after actual completion and satisfactory review. Use the shared `state tasks`, `state task-complete`, and `state checkpoint` tools for task IDs, completion, and coordination progress; they do not advance the SDK Run. SDK must not call legacy `comet handoff --write`. Once plan, tasks, and workspace agree, run `comet state complete-build <change-name> --session <builder-execution-ref> --checks <checks-json-file>` to enter Verify. Resolve drift before submission.
+
+After each advance, use that result's `agent.continuation` / `data.nextAction`. Do not repeat next, select, or check while state is valid and complete; read again only on a cold resume, after external state changes, or for missing information. Load the next Skill only for an `action` in the next phase; resolve `decision`, `evidence`, and `reconcile` within the current Run.
+Use the actual `--session <builder-execution-ref>` for SDK Build; do not repeat it when already supplied.
+
+## Compat path
+
+The remaining original Runtime steps apply only to `runtimeFormat: compat`. Read [Compat operations](reference/compat.md) and continue its current phase. SDK does not load that reference.
+
+## Optional change walkthrough
+
+At Build completion and before presenting Verify results, check the project `.comet/config.yaml` field `change_walkthrough` (enabled by default; only explicit `false` disables it). When enabled, read and execute [Change walkthrough](../comet/reference/change-walkthrough.md), use the shared template to generate or update the same `walkthrough.html`, and provide an opening link. When disabled, skip extra explanation, detailed instructions and rendering; retain the existing summary. Archive preserves existing pages with the materials and links to their actual archived location; it does not generate missing pages, add confirmation or rerun code checks for page updates.

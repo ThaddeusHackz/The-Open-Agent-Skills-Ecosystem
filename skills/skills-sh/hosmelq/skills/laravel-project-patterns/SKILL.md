@@ -1,0 +1,51 @@
+---
+name: laravel-project-patterns
+description: "Use Laravel implementation examples and Pest test patterns for application code, HTTP endpoints, data models, framework integrations and project tooling. Retrieve compact examples for inspected project contracts."
+---
+
+# Laravel Project Patterns
+
+Adapt fictional domain types and helpers to inspected contracts, keep reference-project identities confidential,
+and preserve real APIs such as `sqid` and `HasSqid`. For uncovered behavior,
+report the gap and follow the project’s conventions.
+
+Inspect affected code, nearby examples and applicable configuration; use their actual namespaces and, for tests, suite paths.
+Call helper functions instead of facades whenever a helper exists, such as `config()->integer()`, `now()`, `resolve()`, `str()` and `trans()->string()`.
+
+## Retrieve Missing Patterns
+
+Reuse examples and candidate descriptions already in this context first. For
+missing behavior, write temporary JSON with `request`, `paths` (actual project
+paths), and `code_context` (concise inspected facts), then use:
+
+```shell
+uv run <skill-directory>/scripts/search.py search --task-file=<task.json> --session=<session.json>
+uv run <skill-directory>/scripts/search.py read --session=<session.json> --ids <id> <id>
+```
+
+Search returns five ranked candidates; new IDs include applicability and token
+cost, known IDs only `id` and `read`. Select the smallest applicable set.
+A specialized example covers its stated assertions; retrieve another only for
+missing contracts. Search uncovered requirements with relevant
+facts; `--limit=10` can broaden a shortlist. Rank and shortlist size do not prove
+coverage. Do not glob the catalog or open its files directly.
+
+Read emits complete Markdown examples and a receipt; `blocked` IDs need another
+batch (4,000 source tokens per response). `read: true` means already emitted:
+reuse that content; repeated reads omit it. Use one temporary session outside the
+skill per task/agent context. After compaction use a new session to restore
+descriptions, or `read --repeat` if the needed ID remains known. Changed sources require searching again.
+
+For tests, keep standalone tests at file scope when the suite uses no `describe`, and keep canonical names, documented case order, fixtures, assertions and datasets. Order cases by purpose, not alphabetically: structural checks first, then cases grouped by the member or behavior they cover, each group with failing cases before the success case, its variants and side effects. Groups follow the class's member order; everything without semantic order (keys, dataset rows, `toContain()` arguments, expectation chains) stays alphabetical.
+Keep behavior qualifiers (parent/ancestor, case-insensitive, relation state). Add
+`: field_name` only to distinguish separate tests within one block; named dataset
+rows already distinguish fields. Do not introduce behavior to match an example.
+
+Inspect factory definitions: use `recycle()` for existing default parents and
+derive unmodified intermediates from the created record. Keep trashed parents
+explicit. Use `for()` for optional or role-specific relations, root-only tenant
+assignment and deliberate mismatches. Recycling reaches nested factories, matches
+model type and leaves fixed/derived foreign keys unchanged; verify option-list
+membership and avoid same-type pools when an exact parent matters.
+
+First search installs dependencies, downloads the model and builds the index; later searches refresh changed Markdown. Read loads no model. Resolve failures using the [search guide](docs/search.md). Maintainers may inspect catalog files directly.

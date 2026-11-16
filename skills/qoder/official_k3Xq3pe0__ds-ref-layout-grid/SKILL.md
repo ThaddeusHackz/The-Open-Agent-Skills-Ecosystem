@@ -1,0 +1,541 @@
+---
+name: ds-ref-layout-grid
+description: Layout, spacing, and grid math for Splunk Dashboard Studio — 4pt and 8pt grid scales, F-pattern reading flow, hero KPI sizing rules, gutter math for absolute layouts, golden-ratio for hero zones, depth via layered splunk.rectangle, and canvas-zone presets per archetype (all 1920px minimum). Use when wireframing, when ds-design positions panels, or when ds-polish tightens alignment.
+---
+
+# ds-ref-layout-grid — Layout, spacing, and grid math
+
+> **Status:** skeleton only. Body extracted from `ds-ref-design-principles` in a follow-up task.
+
+## Scope (what's IN)
+
+- 4pt and 8pt grid scales with named tokens (`S_0_5`, `S_1`, `S_2`, ...).
+- F-pattern reading flow + panel placement.
+- Hero KPI sizing rules (1.5–2× supporting KPIs).
+- Gutter math (20px standard, 8px tight, 32px exec).
+- Golden ratio for hero zones.
+- Depth via layered `splunk.rectangle` (Studio has no box-shadow).
+- Per-archetype canvas-zone presets.
+
+## Out of scope (what's NOT here)
+
+- Archetype shapes themselves — see `ds-ref-archetypes`.
+- Color of layered rectangles — see `ds-ref-color`.
+
+## Consults
+
+- `ds-ref-archetypes` (per-archetype canvas zones).
+
+## Consulted by
+
+- `ds-couture` (layout commitment after archetype).
+- `ds-design` (panel positioning during wireframing).
+- `ds-polish` (alignment fixes).
+
+## Source / migration
+
+- Extracted from: `ds-ref-design-principles` "Layout principles", "KPI sizing rules", "Spacing/radius/type scale", "Depth and layering" sections.
+- New content: golden ratio for hero zones, gutter presets per archetype.
+
+## Estimated size
+
+L
+
+---
+
+## Layout principles
+
+- **F-pattern reading** — most important KPIs at top-left.
+- **Visual hierarchy** — size signals importance.
+- **Grouping** — related panels adjacent. `splunk.rectangle`
+  backgrounds delimit zones.
+- **Whitespace** — minimum 20 px gutters and canvas margins.
+- **Consistent column widths** — 2-column or 3-column grid; stick to
+  it.
+
+## MANDATORY: Absolute layout
+
+**All dashboards MUST use `layout.type: "absolute"` unless the user
+explicitly requests grid.** Grid layout is not supported by this skill
+family by default. Reasons:
+
+1. `splunk.rectangle` (depth cards, shadow layers, dividers) only
+   renders in absolute layout — silently ignored in grid.
+2. `splunk.singlevalueicon` only renders in absolute layout.
+3. Pixel-precise panel placement is required for the golden-ratio
+   hero zones, gutter math, and z-order layering documented here.
+
+Grid layout is a Splunk feature for quick prototyping. Our design
+system does not use it. If you find yourself writing `"type": "grid"`
+without an explicit user request to do so, stop — you're in the wrong
+mode.
+
+**Override:** if the user explicitly says "use grid layout", comply —
+but warn that shadow rectangles and singlevalueicon will not render.
+
+**Required wrapper structure:**
+
+```json
+{
+  "layout": {
+    "type": "absolute",
+    "options": { "width": 1920, "height": <content-driven> },
+    "structure": [...]
+  }
+}
+```
+
+## MANDATORY: Shadow rectangles (depth layer)
+
+**Every panel group MUST have a `splunk.rectangle` shadow card behind
+it.** Dashboard Studio has no `box-shadow` CSS — depth is faked via a
+slightly brighter rectangle placed BEHIND panels in `structure` order.
+
+**Shadow recipe:**
+
+| Property | Value | Rationale |
+|---|---|---|
+| `fillColor` | 2–3 stops brighter than canvas (e.g. `#1F2937` on `#0B0C10` canvas) | Must be visibly distinct from canvas |
+| `fillOpacity` | 1.0 | Full opacity — no alpha tricks |
+| `strokeColor` | `"transparent"` | No border |
+| `rx` | 8 (matches `R_CARD`) | Rounded corners match panel corners |
+
+**Sizing:** shadow rect is panel group + 10 px inset on all sides.
+If a KPI group is at `x=40, y=80, w=1840, h=160`, the shadow rect is
+at `x=30, y=70, w=1860, h=180`.
+
+**Panels on top MUST set `backgroundColor`** to the surface color
+(e.g. `#13141A`) so the shadow peeks out only at the edges. Without
+explicit `backgroundColor`, panels are transparent and the shadow
+bleeds through.
+
+**Z-order:** shadow rects FIRST in `layout.structure`, then panels.
+Earlier = behind.
+
+```json
+"structure": [
+  { "item": "viz_shadow_kpi",  "position": { "x": 30, "y": 70, "w": 1860, "h": 180 } },
+  { "item": "viz_kpi_1",       "position": { "x": 40, "y": 80, "w": 440,  "h": 160 } },
+  { "item": "viz_kpi_2",       "position": { "x": 500, "y": 80, "w": 440, "h": 160 } }
+]
+```
+
+**Default enforcement:** a dashboard without shadow rectangles fails
+the Scope Check ("Panel cards consistent" gate). Every panel group
+gets a shadow unless the user explicitly requests otherwise.
+
+## Faux glow — soft depth via layered rectangles
+
+Dashboard Studio has no blur, glow, or box-shadow. Simulate soft
+depth by stacking 2-3 rectangles with decreasing opacity and
+increasing size behind a panel group:
+
+```json
+"structure": [
+  { "item": "viz_glow_outer", "position": { "x": 16, "y": 66, "w": 1888, "h": 208 } },
+  { "item": "viz_glow_mid",   "position": { "x": 24, "y": 74, "w": 1872, "h": 192 } },
+  { "item": "viz_card",       "position": { "x": 32, "y": 82, "w": 1856, "h": 176 } },
+  { "item": "viz_kpi_1",      "position": { "x": 48, "y": 90, "w": 440,  "h": 160 } }
+]
+```
+
+| Layer | fillOpacity | fillColor | rx | Purpose |
+|---|---|---|---|---|
+| `viz_glow_outer` | 0.04 | accent color | 16 | Outermost halo |
+| `viz_glow_mid` | 0.08 | accent color | 12 | Middle glow |
+| `viz_card` | 0.6 | surface color | 6 | Card background |
+
+Use the dashboard's accent color for glow layers (e.g. `#8b5cf6` for
+purple glow, `#10b981` for green). The low opacity (0.04–0.08) creates
+a subtle halo effect that adds dimension without being distracting.
+
+**rx values:** use small radii (4–8) for cards. rx=12+ looks bloated
+and cheap. Reference dashboards (Stripe, Linear, Vercel) use rx=4-8.
+
+## Gradient background — simulated depth on canvas
+
+Flat black canvases look AI-generated. Add subtle gradient depth via
+2-3 full-canvas rectangles with low-opacity fills:
+
+```json
+"structure": [
+  { "item": "viz_bg_gradient_1", "position": { "x": 0, "y": 0, "w": 1920, "h": 1080 } },
+  { "item": "viz_bg_gradient_2", "position": { "x": 400, "y": 0, "w": 1120, "h": 600 } },
+  ...panels...
+]
+```
+
+| Layer | fillColor | fillOpacity | Purpose |
+|---|---|---|---|
+| `viz_bg_gradient_1` | `#1e1b4b` (deep indigo) | 0.3 | Full canvas base wash |
+| `viz_bg_gradient_2` | `#7c3aed` (violet) | 0.04 | Top-center highlight |
+
+This creates a subtle color shift across the canvas. Keep opacity
+under 0.1 for highlight layers — anything higher looks like a colored
+rectangle, not a gradient.
+
+## Default canvas size
+
+**Minimum canvas: 1920 × 1080 px.** No exceptions. Dashboards below
+this resolution look cramped, waste screen real estate on modern
+monitors, and signal "I didn't think about the viewing context."
+
+Every Splunk dashboard is viewed on 1080p+ screens — analyst
+workstations (1920×1080), 27" monitors (2560×1440), SOC walls
+(1920×1080 per tile), executive laptops (1920×1200+). Designing
+for less than 1920×1080 is designing for hardware that doesn't
+exist in the target environment.
+
+**Width: always 1920.** No 1440, no 1280, no 1600.
+
+**Height: minimum 1080, variable based on content.** Compute total
+content height from layered zones (header + KPI strip + chart row
++ table row + footer). Splunk scrolls vertically when needed.
+
+```json
+"layout": {
+  "type": "absolute",
+  "options": { "width": 1920, "height": 1080 }
+}
+```
+
+| Archetype | Width | Typical height |
+|---|---|---|
+| Standard dashboard | 1920 | 1080 (fits one screen) |
+| Exec summary | 1920 | 1080–1280 (4 zones, denser KPI strip) |
+| NOC / SOC wall | 1920 | 1080 (exact full HD per tile) |
+| Long-form report | 1920 | 1800–2400 (multiple sections, scrolls) |
+| Branded viz pack | 1920 | 1080–1200 (hero image + data) |
+
+## Recommended canvas zones (per archetype)
+
+### Exec summary (1920 × 1080 px)
+
+Four-zone layout for executive dashboards: input bar, hero KPI row,
+primary chart zone, secondary detail zone.
+
+```
+x=0                                                    x=1920
+y=0   +-----------------------------------------------------+
+      | Canvas margin (24 px)                               |
+y=24  | [Input bar: time + filters]              h=44       |
+y=88  | [KPI row — background rect]              h=180      |
+      |  KPI1 | KPI2 | KPI3 | KPI4 | KPI5                  |
+y=288 | [Primary chart zone]                     h=380      |
+      |  Main chart (w=1140) | Table (w=720)                |
+y=688 | [Secondary / detail zone]                h=340      |
+      |  Alert history / secondary chart                    |
+y=1048| [Footer / nav links]                     h=24       |
+y=1080+-----------------------------------------------------+
+```
+
+- Panel minimum heights: singlevalue 120, chart 280, table 240 px.
+- Gutter: 24 px between panels; 24 px from canvas edges.
+- KPI background card: `splunk.rectangle` BEHIND KPIs (earlier in
+  `structure` array).
+
+### Operational NOC (1920 × 1080 px)
+
+Wider canvas, denser grid. Status tiles get more breathing room
+horizontally; primary monitoring chart is taller. Designed for a
+24/7 NOC team viewing on a 27" desk monitor or a small wall display.
+
+```
+x=0                                                            x=1920
+y=0   +-------------------------------------------------------------+
+      | Canvas margin (20 px)                                       |
+y=20  | [Input bar: time + scope filters]              h=40         |
+y=80  | [Status-tile row — background rect]            h=180        |
+      |  T1 | T2 | T3 | T4 | T5 | T6                                |
+y=280 | [Primary monitoring chart]                     h=420        |
+      |  Multi-series line / area (w=1240) | Top-N bar (w=640)      |
+y=720 | [Detail / secondary zone]                      h=320        |
+      |  Recent alerts table | Saturation heatmap                   |
+y=1060| [Footer]                                       h=20         |
+y=1080+-------------------------------------------------------------+
+```
+
+- Status tiles use `splunk.singlevalueicon` or `splunk.singlevalue`
+  with dynamic `majorColor` — 6 across at 280 × 180.
+- Gutter: 20 px standard.
+- Primary chart taller than exec (420 vs 340) so multi-series detail
+  remains legible.
+
+### Analytical deep-dive (1600 × 1100 px)
+
+Filter bar prominent, table-heavy bottom. Designed for fraud / SOC
+investigators running open-ended exploration sessions.
+
+```
+x=0                                                       x=1600
+y=0   +---------------------------------------------------------+
+      | Canvas margin (16 px)                                   |
+y=16  | [Filter bar — multi-row, prominent]         h=80        |
+      |  Time | Region | Severity | User | Asset | Search       |
+y=112 | [Correlation chart zone]                    h=320       |
+      |  Scatter / parallelcoords (w=1000) | Distribution (w=584)|
+y=448 | [Cross-reference KPIs]                      h=140       |
+      |  KPI1 | KPI2 | KPI3 | KPI4 | KPI5                       |
+y=604 | [Detail table — primary investigation surface] h=480    |
+      |  Sortable, drilldownable, ~12-20 visible rows           |
+y=1100+---------------------------------------------------------+
+```
+
+- Filter bar can wrap to 2 rows; allow up to 80 px.
+- Table is the hero — 480 px tall, drilldown-enabled.
+- Gutter: 16 px outer, 12 px inner. Denser than exec to fit filters
+  + scatter + table.
+
+### SOC wall display (1920 × 1080 — or 3840 × 2160 scaled)
+
+Wide canvas scaled for distance viewing (10–100 ft). Tile sizes
+larger, text larger, gutters tighter to maximize visible information.
+Same coordinate logic at 4K — multiply every value by 2.
+
+```
+x=0                                                            x=1920
+y=0   +-------------------------------------------------------------+
+      | Canvas margin (12 px)                                       |
+y=12  | [Title strip + global health]                  h=80         |
+y=100 | [Severity pyramid — hero zone]                 h=520        |
+      |  Geo map (w=1186) | Severity tile column (w=722)            |
+      |  (golden-ratio split: 1186 / 722 + 12 px gutter)            |
+y=628 | [Status tile rail]                             h=200        |
+      |  T1 | T2 | T3 | T4 | T5 | T6 | T7 | T8                      |
+y=836 | [Live event ticker]                            h=232        |
+      |  Streaming events table, large rows, no chrome              |
+y=1080+-------------------------------------------------------------+
+```
+
+- Font sizes 1.4–1.8× larger than desk-monitor archetypes.
+- Gutter: 8 px inner (max info density), 12 px outer.
+- Hero zone sized via golden ratio (see "Golden-ratio for hero zones"
+  below).
+
+## KPI sizing rules
+
+- **Minimum:** 3×3 grid cells (~300×120 px). Below this, major value
+  unreadable at distance.
+- **Recommended:** 300–440 px wide, font 36–56 px, 4-KPI row on 1440
+  canvas.
+- **Max per row:** 6.
+- **Show trend or sparkline** when direction matters.
+- **Always set `unit`** (`"%"`, `"ms"`, `"°C"`).
+- Use `splunk.singlevalueicon` for binary status, `splunk.markergauge`
+  for SLA thresholds, `splunk.fillergauge` for percentage-completion.
+- Status KPIs: dynamic `majorColor` via `rangeValue`. Informational
+  counts: static `#006D9C`.
+
+### KPI grouping with background cards
+
+```
+splunk.rectangle  x=20,  y=80,  w=1400, h=160   (card behind KPIs)
+KPI 1             x=30,  y=90,  w=320,  h=140
+KPI 2             x=370, y=90,  w=320,  h=140
+KPI 3             x=710, y=90,  w=320,  h=140
+KPI 4             x=1050,y=90,  w=350,  h=140
+```
+
+Rule: card edge + 10 px = panel edge on all sides. Place rectangle
+entry in `layout.structure` BEFORE the KPI entries.
+
+## Spacing scale (px)
+
+| Token | px | Common use |
+|---|---|---|
+| `S_0_5` | 4 | Tight icon gap. |
+| `S_1` | 8 | Inline label gap. |
+| `S_1_5` | 12 | Panel inner padding (tight). |
+| `S_2` | 16 | Section heading → first panel. |
+| `S_2_5` | 20 | **Default gutter between panels.** |
+| `S_3` | 24 | KPI row → primary chart zone. |
+| `S_4` | 32 | Between logical sections. |
+| `S_6` | 48 | Between major zones in long dashboards. |
+| `S_8` | 64 | Canvas outer margin on ultrawide wall displays. |
+
+## Corner radius (px)
+
+| Token | px | Use |
+|---|---|---|
+| `R_SHARP` | 0 | Grid / table cells. |
+| `R_SUBTLE` | 4 | Inputs, small chips. |
+| `R_CARD` | 8 | **Default card / rectangle radius.** |
+| `R_HERO` | 12 | Hero KPI background. |
+| `R_PILL` | 999 | Status chips, badges. |
+
+## Depth and layering in Dashboard Studio
+
+Dashboard Studio has no box-shadow, no backdrop-blur. Depth comes from
+**layered rectangles** — `splunk.rectangle` first in
+`layout.structure` (renders behind), KPIs after.
+
+**Array-order rule:** earlier = behind, later = in front. No
+`z-index`.
+
+**Shape layouts only:** `splunk.rectangle` / `splunk.ellipse` require
+`layout.type: "absolute"`. Silently ignored on grid / tabs.
+
+## Golden-ratio for hero zones (NEW)
+
+When an archetype calls for a hero zone — one dominant chart plus a
+supporting tile cluster — the 1.618 golden ratio between hero and
+supporting widths produces visual rhythm that a 50/50 split or a
+70/30 eyeball never quite achieves.
+
+**The math:** total canvas width minus gutter, split so
+`hero / supporting = 1.618`. Or equivalently:
+`hero = total × 0.618` and `supporting = total × 0.382`.
+
+| Canvas | Total (minus margins) | Gutter | Hero | Supporting |
+|---|---|---|---|---|
+| 1440 px | 1400 px | 20 px | 884 px | 556 px |
+| 1600 px | 1568 px | 16 px | 988 px | 612 px |
+| 1920 px | 1880 px | 20 px | 1186 px | 734 px |
+| 1920 px (SOC) | 1908 px | 12 px | 1186 px | 722 px |
+| 3840 px (4K) | 3800 px | 24 px | 2370 px | 1466 px |
+
+**When to use the rule:**
+
+- **SOC dashboards** — geo map (hero) + severity tile column
+  (supporting).
+- **Exec summaries** — primary chart (hero) + KPI strip
+  (supporting), turned vertical to make the strip a column.
+- **Operational NOC** — primary multi-series chart (hero) + Top-N
+  bar (supporting).
+
+**When NOT to use it:**
+
+- Symmetric comparisons (two equal-weight charts).
+- Three-column layouts (use thirds, not golden).
+- Tables — readability requires a single full-width row, not a
+  ratio split.
+
+## Gutter presets per archetype (NEW)
+
+Different archetypes tolerate different gutter densities. The
+spacing scale tokens above are the menu; these are the recommended
+defaults per archetype.
+
+| Archetype | Outer margin | Inner gutter | Notes |
+|---|---|---|---|
+| **Exec summary** | 32 px (`S_4`) | 24 px (`S_3`) | Generous, executive feel; KPIs breathe. |
+| **Operational** | 20 px (`S_2_5`) | 20 px (`S_2_5`) | Standard, balanced density. |
+| **Analytical** | 16 px (`S_2`) | 12 px (`S_1_5`) | Denser to fit filter bar + scatter + table. |
+| **SOC wall** | 12 px (`S_1_5`) | 8 px (`S_1`) | Maximum information density; slight outer breathing. |
+
+**Rule of thumb:** the further the viewer, the tighter the inner
+gutter (information density wins). The closer the viewer, the wider
+the gutter (calm wins). SOC wall at 100 ft tolerates 8 px because the
+gap visually scales with distance; an exec at 18 inches needs the 24
+px gutter to feel deliberate.
+
+**Pairing with depth:** when using layered `splunk.rectangle` cards
+behind a panel group, the rectangle inset is the gutter / 2 — a 20
+px gutter means the card's inner edge is 10 px outside each panel
+edge. See "KPI grouping with background cards" above.
+
+## Viz rhythm zones — density layering
+
+A dashboard that repeats the same viz type vertically reads as
+monotonous. Compose dashboards like a magazine page — vary density
+per zone to create visual rhythm and guide the eye.
+
+### The three density layers
+
+| Layer | Purpose | Panel height | Viz types | Reading time |
+|---|---|---|---|---|
+| **Sparse** | Hero metrics, instant scan | 120–180 px | `singlevalue`, `singlevalueicon`, `fillergauge`, `markergauge` | 2 sec |
+| **Medium** | Data story, trends | 320–480 px | `area`, `column`, `line`, `choropleth`, `punchcard` | 5–15 sec |
+| **Dense** | Reference, drill-down | 280–400 px | `table` (heatmap rows), `events` | 30+ sec |
+
+### Rhythm sequences (1920 × content-driven)
+
+**SOC/NOC pattern:**
+```
+y=20   [input bar]                        sparse   h=40
+y=80   [icon strip — 6 singlevalueicon]   sparse   h=180
+y=280  [hero area chart + side bar]       medium   h=420
+y=720  [alert table with heatmap]         dense    h=320
+y=1060 [footer]                           sparse   h=20
+```
+
+**Executive pattern:**
+```
+y=20   [input bar]                        sparse   h=40
+y=80   [hero KPI — 1 large + 3 small]    sparse   h=160
+y=260  [primary trend chart]              medium   h=360
+y=640  [3-column summary KPIs]            sparse   h=140
+y=800  [detail table]                     dense    h=240
+y=1060 [footer]                           sparse   h=20
+```
+
+**Analytical pattern:**
+```
+y=16   [multi-row filter bar]             sparse   h=80
+y=112  [scatter/correlation chart]        medium   h=320
+y=448  [cross-reference KPI strip]        sparse   h=140
+y=604  [investigation table]              dense    h=480
+```
+
+### Rhythm rules
+
+1. **Never repeat the same density layer more than twice in a row.**
+   If you have three medium zones stacked, replace the middle with a
+   sparse summary or a dense table.
+2. **Sparse → medium → dense is the natural flow** (overview first,
+   detail last). But breaking the flow intentionally (medium → sparse
+   → dense) creates a visual "breath" between heavy sections.
+3. **Every density transition needs a section header** (markdown with
+   `fontSize: "default"` or `"large"`). Headers are the visual break
+   between layers.
+
+## Scale contrast patterns
+
+When the hero element in a zone needs to dominate, use these tested
+ratios:
+
+### Asymmetric KPI strip (hero + supporting)
+
+```json
+"structure": [
+  { "item": "viz_shadow",    "position": { "x": 30, "y": 70, "w": 1860, "h": 200 } },
+  { "item": "viz_kpi_hero",  "position": { "x": 40, "y": 80, "w": 560,  "h": 180 } },
+  { "item": "viz_kpi_2",     "position": { "x": 620, "y": 80, "w": 380,  "h": 180 } },
+  { "item": "viz_kpi_3",     "position": { "x": 1020, "y": 80, "w": 380, "h": 180 } },
+  { "item": "viz_kpi_4",     "position": { "x": 1420, "y": 80, "w": 380, "h": 180 } }
+]
+```
+
+The hero KPI is 560 px wide (1.5× the 380 px supporting KPIs). Give
+it a larger `majorFontSize` or pair it with a trend line to visually
+anchor the strip.
+
+### Hero chart with sidebar
+
+```json
+"structure": [
+  { "item": "viz_shadow_main", "position": { "x": 30, "y": 270, "w": 1230, "h": 440 } },
+  { "item": "viz_shadow_side", "position": { "x": 1280, "y": 270, "w": 610, "h": 440 } },
+  { "item": "viz_chart_hero",  "position": { "x": 40, "y": 280, "w": 1210, "h": 420 } },
+  { "item": "viz_chart_side",  "position": { "x": 1290, "y": 280, "w": 590, "h": 420 } }
+]
+```
+
+Hero chart: 1210 px. Side chart: 590 px. Ratio: 2.05×. The hero gets
+the complex multi-series story; the sidebar shows a complementary
+single-metric view (top-N bar, donut, gauge).
+
+### Punch color concentration
+
+In a multi-series chart, make ONE series the accent color and all
+others neutral:
+
+```json
+"options": {
+  "seriesColors": ["#06B6D4", "#475569", "#475569", "#475569", "#475569"],
+  "seriesOpacities": [1, 0.5, 0.5, 0.5, 0.5]
+}
+```
+
+The accent series (#06B6D4) pops while supporting series recede. This
+maintains data completeness without overwhelming the visual hierarchy.

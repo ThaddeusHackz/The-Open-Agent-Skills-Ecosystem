@@ -1,0 +1,392 @@
+#!/usr/bin/env -S uv run --script
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Netresearch DTT GmbH
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "atlassian-python-api>=3.41.0,<4",
+#     "click>=8.1.0,<9",
+# ]
+# ///
+"""Jira worklog operations - add and list time tracking entries."""
+
+import sys
+from datetime import datetime
+from pathlib import Path
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Shared library import (TR1.1.1 - PYTHONPATH approach)
+# ═══════════════════════════════════════════════════════════════════════════════
+_script_dir = Path(__file__).parent
+_lib_path = _script_dir.parent / "lib"
+if _lib_path.exists():
+    sys.path.insert(0, str(_lib_path.parent))
+
+import re
+
+import click
+from lib.client import LazyJiraClient
+from lib.markup_cli import MarkupGates, guard_wiki_markup, markup_options
+from lib.output import comment_to_text, error, format_output, success, warning
+from lib.ticket_state import print_ticket_state, with_ticket_state
+from lib.users import check_mentions_cli, person_label
+
+# Trailing UTC offset in any ISO-8601 spelling: "Z", "+01:00" or "+0100".
+# The hour and minute ranges are part of the match on purpose: `\d{2}` would
+# accept "+25:00" and rewrite it to "+2500", which is neither valid nor the
+# untouched passthrough this function promises for input it cannot read.
+_TZ_SUFFIX_RE = re.compile(r"(?:(?P<utc>[Zz])|(?P<sign>[+-])(?P<hh>[01]\d|2[0-3]):?(?P<mm>[0-5]\d))$")
+
+# Date and time to the second, with an optional fractional part of any length.
+_DATE_TIME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?$")
+
+
+def _local_offset_at(naive: datetime) -> str:
+    """The compact local UTC offset **for that wall-clock instant**.
+
+    Not `datetime.now()`: booking `--started 2025-01-15T09:00` in July from a
+    DST zone must record January's offset, not July's. Reading the offset at
+    call time puts the entry an hour out for exactly half the year, silently,
+    and `started` is the field this whole helper exists to get right.
+
+    A naive datetime's ``astimezone()`` interprets it as local time and resolves
+    the zone for its own date, which is the rule wanted here. Ambiguous and
+    non-existent wall times inside a DST transition resolve to the platform's
+    choice rather than raising — one hour, once a year, against the alternative
+    of refusing a timestamp Jira would have accepted.
+    """
+    return naive.astimezone().strftime("%z")
+
+
+def normalize_iso_timestamp(timestamp: str) -> str:
+    """Normalize ISO timestamp to Jira's required format.
+
+    Jira requires: YYYY-MM-DDTHH:MM:SS.sss+ZZZZ (e.g., 2025-01-15T09:00:00.000+0100)
+
+    Accepts various formats:
+      - 2025-01-15T09:00:00 (adds local timezone)
+      - 2025-01-15T09:00 (adds seconds and local timezone)
+      - 2025-01-15 (adds time 00:00:00 and local timezone)
+      - 2025-01-15T09:00:00+01:00 (converts timezone format)
+      - 2025-01-15T09:00:00.123456+01:00 (truncates to milliseconds)
+      - 2025-01-15T09:00:00Z (Z is +0000, a spelling Jira itself rejects)
+      - 2025-01-15T09:00:00.000+0100 (pass through)
+
+    A value carrying no offset is anchored to the local zone **as of its own
+    date**, not as of now. Anything unrecognised is returned exactly as the
+    caller typed it, so an odd shape reaches Jira intact rather than
+    half-rewritten.
+    """
+    # Already in Jira format (has milliseconds and compact timezone)
+    if re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{4}$", timestamp):
+        return timestamp
+
+    # Date only: 2025-01-15 — midnight local, on that date's offset.
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", timestamp):
+        # The shape matches but the date need not exist (2025-02-30). Parsing is
+        # the first step here that can reject input, and the contract for input
+        # this function cannot read is to hand it back, not to abort the command.
+        try:
+            midnight = datetime.strptime(timestamp, "%Y-%m-%d")
+        except ValueError:
+            return timestamp
+        return f"{timestamp}T00:00:00.000{_local_offset_at(midnight)}"
+
+    # Split the offset off the body; a bare body inherits local time.
+    tz_match = _TZ_SUFFIX_RE.search(timestamp)
+    if tz_match:
+        body = timestamp[: tz_match.start()]
+        if tz_match.group("utc"):
+            tz_compact = "+0000"
+        else:
+            tz_compact = f"{tz_match.group('sign')}{tz_match.group('hh')}{tz_match.group('mm')}"
+    else:
+        body, tz_compact = timestamp, None
+
+    # No seconds: 2025-01-15T09:00
+    if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$", body):
+        body = f"{body}:00"
+
+    # Seconds, with or without a fractional part — Jira takes exactly 3 digits.
+    dt_match = _DATE_TIME_RE.match(body)
+    if dt_match:
+        if tz_compact is None:
+            try:
+                parsed = datetime.strptime(dt_match.group(1), "%Y-%m-%dT%H:%M:%S")
+            except ValueError:
+                return timestamp
+            tz_compact = _local_offset_at(parsed)
+        millis = (dt_match.group(2) or "").ljust(3, "0")[:3]
+        return f"{dt_match.group(1)}.{millis}{tz_compact}"
+
+    # Fallback: the original input, offset included (let Jira handle/reject it)
+    return timestamp
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CLI Definition
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@click.group()
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+@click.option("--quiet", "-q", is_flag=True, help="Minimal output")
+@click.option("--env-file", type=click.Path(), help="Environment file path")
+@click.option("--profile", "-P", help="Jira profile name from ~/.jira/profiles.json")
+@click.option("--debug", is_flag=True, help="Show debug information on errors")
+@click.pass_context
+def cli(ctx, output_json: bool, quiet: bool, env_file: str | None, profile: str | None, debug: bool):
+    """Jira worklog operations.
+
+    Add and list time tracking entries for Jira issues.
+
+    TIME_SPENT format examples: '2h', '2h 30m', '1d', '30m'
+    (passed directly to Jira API - see D10)
+    """
+    ctx.ensure_object(dict)
+    ctx.obj["json"] = output_json
+    ctx.obj["quiet"] = quiet
+    ctx.obj["debug"] = debug
+    ctx.obj["client"] = LazyJiraClient(env_file=env_file, profile=profile)
+    # Kept for callers that resolve the config themselves rather than through
+    # the client - the render preview does. Without them guard_wiki_markup
+    # reads None and previews against the DEFAULT profile, which is a
+    # different tenant from the one this command is writing to.
+    ctx.obj["env_file"] = env_file
+    ctx.obj["profile"] = profile
+
+
+def _build_worklog_data(time_spent: str, comment: str | None, started: str | None) -> dict:
+    """The JSON body for issue_add_json_worklog, also what a --dry-run prints."""
+    worklog_data = {"timeSpent": time_spent}
+    if comment:
+        worklog_data["comment"] = comment
+    if started:
+        worklog_data["started"] = normalize_iso_timestamp(started)
+    else:
+        # Default to current time in local timezone (Jira format)
+        worklog_data["started"] = datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M:%S.000%z")
+    return worklog_data
+
+
+def _print_dry_run(ctx, issue_key: str, worklog_data: dict) -> None:
+    """Show the worklog a real ``add`` would send, without sending it.
+
+    ``--json`` gets the request body itself, ``--quiet`` the time spent alone.
+    """
+    if ctx.obj["quiet"]:
+        print(worklog_data["timeSpent"])
+        return
+    if ctx.obj["json"]:
+        format_output({"dry_run": True, "issue_key": issue_key, "worklog": worklog_data}, as_json=True)
+        return
+    warning("DRY RUN - No worklog will be added")
+    print(f"\nWould add worklog to {issue_key}: {worklog_data['timeSpent']}")
+    print(f"  Started: {worklog_data['started']}")
+    if "comment" in worklog_data:
+        print(f"  Comment: {worklog_data['comment']}")
+
+
+@cli.command()
+@click.argument("issue_key")
+@click.argument("time_spent")
+@click.option("--comment", "-c", help="Worklog comment")
+@click.option(
+    "--started", help="Start time (ISO format: YYYY-MM-DD, YYYY-MM-DDTHH:MM, or YYYY-MM-DDTHH:MM:SS; default: now)"
+)
+@click.option("--no-verify-mentions", is_flag=True, help="Skip [~username] mention verification in --comment")
+@markup_options
+@click.option("--dry-run", is_flag=True, help="Show the worklog as it would be added, without adding it")
+@click.pass_context
+def add(
+    ctx,
+    issue_key: str,
+    time_spent: str,
+    comment: str | None,
+    started: str | None,
+    no_verify_mentions: bool,
+    gates: MarkupGates,
+    dry_run: bool,
+):
+    """Add worklog entry to an issue.
+
+    ISSUE_KEY: The Jira issue key (e.g., PROJ-123)
+
+    TIME_SPENT: Time spent in Jira format (e.g., '2h 30m', '1d', '30m')
+
+    --dry-run prints the worklog as it would be added, with the comment after
+    the escape and the lint, and adds nothing. The render preview and the
+    mention lookup are skipped.
+
+    Examples:
+
+      jira-worklog add PROJ-123 "2h 30m" -c "Code review"
+
+      jira-worklog add PROJ-123 "1d" --started "2025-01-15T09:00:00"
+
+      jira-worklog add PROJ-123 "2h" -c "Code review" --dry-run
+    """
+    ctx.obj["client"].with_context(issue_key=issue_key)
+    client = ctx.obj["client"]
+
+    # A worklog comment renders wiki markup — same gates as jira-comment add.
+    # Under --dry-run only the render call is dropped, so the preview shows the
+    # comment a real run would post.
+    comment = guard_wiki_markup(
+        comment,
+        gates=gates.offline() if dry_run else gates,
+        issue_key=issue_key,
+        env_file=ctx.obj.get("env_file"),
+        profile=ctx.obj.get("profile"),
+        label="worklog comment",
+    )
+    if not dry_run:
+        check_mentions_cli(client, comment, skip=no_verify_mentions)
+
+    try:
+        worklog_data = _build_worklog_data(time_spent, comment, started)
+
+        if dry_run:
+            _print_dry_run(ctx, issue_key, worklog_data)
+            return
+
+        # Add worklog via REST API (using issue_add_json_worklog which accepts timeSpent string)
+        result = client.issue_add_json_worklog(issue_key, worklog_data)
+
+        if ctx.obj["quiet"]:
+            print(result.get("id", "ok"))
+        elif ctx.obj["json"]:
+            format_output(with_ticket_state(ctx.obj["client"], issue_key, result, ctx_obj=ctx.obj), as_json=True)
+        else:
+            success(f"Added worklog to {issue_key}: {time_spent}")
+            if comment:
+                print(f"  Comment: {comment}")
+            print(f"  Worklog ID: {result.get('id', 'N/A')}")
+            print_ticket_state(ctx.obj["client"], issue_key, ctx.obj)
+
+    except Exception as e:
+        if ctx.obj["debug"]:
+            raise
+        error(f"Failed to add worklog to {issue_key}: {e}")
+        sys.exit(1)
+
+
+@cli.command("list")
+@click.argument("issue_key")
+@click.option("--limit", "-n", default=10, help="Max entries to show")
+@click.option("--truncate", type=int, metavar="N", help="Truncate comments to N characters")
+@click.pass_context
+def list_worklogs(ctx, issue_key: str, limit: int, truncate: int | None):
+    """List worklog entries for an issue.
+
+    ISSUE_KEY: The Jira issue key (e.g., PROJ-123)
+
+    Examples:
+
+      jira-worklog list PROJ-123
+
+      jira-worklog list PROJ-123 --limit 5 --json
+    """
+    ctx.obj["client"].with_context(issue_key=issue_key)
+    client = ctx.obj["client"]
+
+    try:
+        result = client.issue_get_worklog(issue_key)
+        worklogs = result.get("worklogs", [])
+
+        # Newest first, then limit
+        worklogs = list(reversed(worklogs))[:limit]
+
+        if ctx.obj["json"]:
+            format_output(worklogs, as_json=True)
+        elif ctx.obj["quiet"]:
+            for wl in worklogs:
+                print(wl.get("id", ""))
+        else:
+            if not worklogs:
+                print(f"No worklogs found for {issue_key}")
+            else:
+                print(f"Worklogs for {issue_key} ({len(worklogs)} shown):\n")
+                for wl in worklogs:
+                    author = person_label(wl.get("author"))
+                    time_spent = wl.get("timeSpent", "N/A")
+                    started = wl.get("started", "N/A")[:10] if wl.get("started") else "N/A"
+                    worklog_id = wl.get("id", "N/A")
+                    comment = comment_to_text(wl.get("comment"))
+
+                    print(f"  [{started}] {author}: {time_spent}  (id {worklog_id})")
+                    if comment:
+                        # Truncate if requested
+                        if truncate and len(comment) > truncate:
+                            comment = comment[: truncate - 3] + "..."
+                        print(f"           {comment}")
+
+    except Exception as e:
+        if ctx.obj["debug"]:
+            raise
+        error(f"Failed to get worklogs for {issue_key}: {e}")
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("issue_key")
+@click.argument("worklog_id")
+@click.option("--dry-run", is_flag=True, help="Show what would be deleted without deleting")
+@click.pass_context
+def delete(ctx, issue_key: str, worklog_id: str, dry_run: bool):
+    """Delete a worklog entry from an issue.
+
+    ISSUE_KEY: The Jira issue key (e.g., PROJ-123)
+
+    WORKLOG_ID: The numeric worklog id, as printed by `add` and `list`
+
+    Use this to undo a booking made against the wrong issue, the wrong
+    duration, or the wrong system — e.g. when the team's system of record is a
+    separate time tracker that syncs its own entries into Jira, and a direct
+    Jira worklog would double-book.
+
+    Deleting another user's worklog requires the "Delete All Worklogs"
+    permission; your own needs "Delete Own Worklogs".
+
+    Examples:
+
+      jira-worklog delete PROJ-123 409062 --dry-run
+
+      jira-worklog delete PROJ-123 409062
+    """
+    ctx.obj["client"].with_context(issue_key=issue_key)
+    client = ctx.obj["client"]
+
+    try:
+        # Fetch the entry first so the operator sees which booking is going
+        # away — a bare numeric id is easy to mistype and impossible to sanity
+        # check after the fact.
+        existing = client.get(f"rest/api/2/issue/{issue_key}/worklog/{worklog_id}") or {}
+        author = person_label(existing.get("author"))
+        time_spent = existing.get("timeSpent", "N/A")
+        started = existing.get("started", "N/A")[:10] if existing.get("started") else "N/A"
+
+        if dry_run:
+            print(f"Would delete worklog {worklog_id} from {issue_key}:")
+            print(f"  [{started}] {author}: {time_spent}")
+            return
+
+        client.delete(f"rest/api/2/issue/{issue_key}/worklog/{worklog_id}")
+
+        if ctx.obj["quiet"]:
+            print(worklog_id)
+        elif ctx.obj["json"]:
+            format_output({"deleted": worklog_id, "issue": issue_key}, as_json=True)
+        else:
+            success(f"Deleted worklog {worklog_id} from {issue_key}")
+            print(f"  [{started}] {author}: {time_spent}")
+
+    except Exception as e:
+        if ctx.obj["debug"]:
+            raise
+        error(f"Failed to delete worklog {worklog_id} from {issue_key}: {e}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    cli()

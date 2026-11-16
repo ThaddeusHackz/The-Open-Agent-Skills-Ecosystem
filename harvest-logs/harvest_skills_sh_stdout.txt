@@ -1,14 +1,28 @@
-[19:00:35] https://www.skills.sh/sitemap-skills-1.xml: 10000 locs
-[19:00:35] https://www.skills.sh/sitemap-skills-2.xml: 10000 locs
-[19:00:35] sitemap universe: 20000 classifiable, 0 unparsed
-Traceback (most recent call last):
-  File "/home/runner/work/The-Open-Agent-Skills-Ecosystem/The-Open-Agent-Skills-Ecosystem/harvest/harvest_skills_sh.py", line 361, in <module>
-    harvest()
-    ~~~~~~~^^
-  File "/home/runner/work/The-Open-Agent-Skills-Ecosystem/The-Open-Agent-Skills-Ecosystem/harvest/harvest_skills_sh.py", line 193, in harvest
-    state["installs"] = fetch_leaderboard()
-                        ~~~~~~~~~~~~~~~~~^^
-  File "/home/runner/work/The-Open-Agent-Skills-Ecosystem/The-Open-Agent-Skills-Ecosystem/harvest/harvest_skills_sh.py", line 103, in fetch_leaderboard
-    rows = data.get("skills") or []
-           ^^^^^^^^
-AttributeError: 'tuple' object has no attribute 'get'
+[19:03:07] https://www.skills.sh/sitemap-skills-1.xml: 10000 locs
+[19:03:07] https://www.skills.sh/sitemap-skills-2.xml: 10000 locs
+[19:03:07] sitemap universe: 20000 classifiable, 0 unparsed
+[19:03:12] leaderboard through page 8: 1600 entries
+[19:03:16] leaderboard through page 16: 3200 entries
+[19:03:19] leaderboard through page 24: 4800 entries
+[19:03:29] leaderboard page 25 failed: GET failed after 4 tries: https://www.skills.sh/api/skills/all-time/25 :: HTTP Error 429: Too Many Requests
+[19:03:29] leaderboard through page 25: 4800 entries
+[19:03:29] leaderboard entries: 4800
+[19:03:29] union: +95 skills from leaderboard not in sitemaps
+[19:03:29] github sources: 2303 repos / 20018 skills; site sources: 77 skills
+[19:03:29] repos to fetch: 2303 (already done: 0)
+[19:03:57] skills.sh repos: 200/2303 done
+[19:05:02] skills.sh repos: 400/2303 done
+[19:06:20] skills.sh repos: 600/2303 done
+[19:07:29] skills.sh repos: 800/2303 done
+[19:09:12] skills.sh repos: 1000/2303 done
+[19:10:19] skills.sh repos: 1200/2303 done
+[19:11:17] skills.sh repos: 1400/2303 done
+[19:12:00] skills.sh repos: 1600/2303 done
+[19:12:35] skills.sh repos: 1800/2303 done
+[19:13:21] skills.sh repos: 2000/2303 done
+[19:14:24] skills.sh repos: 2200/2303 done
+[19:19:44] clone fallback failed gmh5225/awesome-game-security: Command '['git', 'clone', '--depth', '1', '--quiet', 'https://github.com/gmh5225/awesome-game-security.git', '/tmp/repo-yqu0forv/x']' timed out after 180 seconds
+[19:19:44] github done: 2303 repos, 50 failed, 18471 skills extracted, 1547 unresolved
+[19:19:44] site skills to scrape: 77
+[19:19:48] site done: 29/77 scraped
+[19:19:48] skills.sh harvest complete

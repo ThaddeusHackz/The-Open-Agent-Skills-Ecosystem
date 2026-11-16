@@ -1,0 +1,551 @@
+---
+name: benchmark-idx-vs-grep-rg
+description: "Run a controlled coding benchmark across rg, grep, and idx with context reset between phases; track session duration and per-tool interaction counts; compare outcomes for build, feature, and bugfix tasks. Use when: benchmark rg vs grep vs idx, compare search approaches, measure coding session efficiency."
+argument-hint: "Scope to run: full benchmark or a specific phase (build, feature, bugfix)"
+user-invocable: true
+---
+
+# Benchmark rg vs grep vs idx
+
+## What This Skill Produces
+This skill runs a repeatable benchmark that compares three search approaches during software delivery work:
+- rg
+- grep
+- idx
+
+For each approach, the benchmark measures:
+- start and end time per session
+- total session duration
+- count of interactions that used the session's target tool
+- context consumed per scenario (from reset baseline)
+- token consumption broken down by workflow stage
+- delivery correctness across three phases
+
+Token accounting must now be recorded in two parallel views:
+- `workflow_total_*`: includes every measured stage, including `pre_build`
+- `implementation_total_*`: includes only `build`, `feature`, and `bugfix`
+
+Token accounting must also include a per-session provenance label:
+- `measured`: extracted from model/provider usage telemetry
+- `estimated`: derived from transcript text tokenization when telemetry is unavailable
+- `unavailable`: only allowed if neither telemetry nor tokenizer-based estimation can be produced
+
+Mandatory token stages for each tool workflow:
+- `pre_build`
+- `build`
+- `feature`
+- `bugfix`
+
+The benchmark must never leave total token counters as zero when tokens were actually consumed.
+If raw telemetry is missing, estimate token counters from transcript content and mark source as `estimated`.
+If a stage cannot be measured or estimated, record it explicitly as `unavailable` in notes and mark the run as incomplete for token comparison.
+
+## Token Metrics Source and Calculation (Mandatory)
+
+Compute token metrics for each session (tool + phase) using this priority order:
+
+1. Measured telemetry (preferred)
+- Extract usage fields from debug/chat logs for each request/response pair in the session window.
+- Supported field names include (provider-dependent):
+  - `input_tokens`, `output_tokens`, `total_tokens`
+  - `prompt_tokens`, `completion_tokens`, `total_tokens`
+
+2. Estimated from transcript (fallback)
+- If telemetry fields are absent, tokenize transcript payloads and aggregate by stage.
+- Use the model tokenizer declared in logs (for this environment typically `o200k_base`).
+- Estimate input tokens from user/tool-result text sent into model requests.
+- Estimate output tokens from assistant response text/tool-call payload text.
+
+3. Unavailable (last resort)
+- Allowed only when neither telemetry nor tokenizer estimation is feasible.
+- Must set `token_metrics_source=unavailable` and add a blocking note.
+
+Stage allocation rule:
+- Assign each tokenized event to one of: `pre_build`, `build`, `feature`, `bugfix`.
+- Use timestamp windows defined by stage start/end markers captured in the session ledger.
+
+Required formulas:
+- `token_stage_<stage>_total = token_stage_<stage>_input + token_stage_<stage>_output`
+- `workflow_total_* = pre_build + build + feature + bugfix`
+- `implementation_total_* = build + feature + bugfix`
+
+The benchmark outputs a final comparison report with metrics and observations.
+
+## When to Use
+Use this skill when:
+- You want an apples-to-apples comparison between rg, grep, and idx.
+- You want to measure speed and interaction volume for coding tasks.
+- You need a reproducible workflow with context resets between tasks.
+
+Trigger phrases:
+- benchmark rg vs grep vs idx
+- benchmark idx vs grep vs rg
+- compare idx and ripgrep workflow
+- run search tool efficiency benchmark
+- benchmark coding sessions by search approach
+
+## Inputs
+Optional scope argument:
+- full benchmark
+- build only
+- feature only
+- bugfix only
+
+Optional implementation constraints:
+- language/runtime version
+- storage format
+- CLI UX expectations
+
+## Mandatory Workspace (Sandbox)
+All benchmark implementation files must be created inside a temporary directory:
+
+`/tmp/idx-benchmark/<run-id>/`
+
+Use a per-run working directory inside that path (for example `/tmp/idx-benchmark/run-003/studentreg`).
+Do not create benchmark target projects inside this repository.
+
+### Phase continuity within a tool session
+The three phases for each tool (build → feature → bugfix) are sequential and share the same codebase:
+- **build** creates the project from scratch.
+- **feature** adds functionality on top of the build artifacts.
+- **bugfix** fixes a problem in the project that already has the feature.
+
+Do **not** delete or reset the sandbox directory between phases of the same tool.
+The same directory must be carried forward so each phase starts from the state left by the previous one.
+
+Sandbox cleanup timing:
+- Clean the sandbox for a tool only **after** its bugfix phase is fully complete and metrics are recorded.
+- Never clean between phases (build → feature or feature → bugfix) of the same tool.
+- After all tool sessions (or after the last requested phase of the last tool), remove all generated files and folders under `/tmp/idx-benchmark/`.
+- Confirm sandbox is empty (or removed) before finishing the skill.
+
+## Benchmark Workload
+The same workload must be implemented in all three approaches.
+
+Phase 1: Base solution
+- Build a Go CLI for student registration.
+- Support create/insert only.
+- Required fields include personal data plus login and password.
+
+Phase 2: New functionality
+- Add a command to list all registered students.
+- Initially list all stored fields.
+
+Phase 3: Bug fix
+- Fix plaintext password exposure.
+- Store password using bcrypt.
+- Ensure list output does not expose the plaintext password.
+- Validate the fix by confirming stored value is a valid bcrypt hash and the list command never outputs the raw password.
+
+## Branch Strategy
+Create 9 short-lived local branches, one per phase per tool:
+- benchmark/rg-build
+- benchmark/rg-feature
+- benchmark/rg-bugfix
+- benchmark/grep-build
+- benchmark/grep-feature
+- benchmark/grep-bugfix
+- benchmark/idx-build
+- benchmark/idx-feature
+- benchmark/idx-bugfix
+
+## Tool Execution Order (Mandatory)
+When scope is `full benchmark`, execute tools in this exact order:
+1. `rg` (build -> feature -> bugfix)
+2. `grep` (build -> feature -> bugfix)
+3. `idx` (build -> feature -> bugfix)
+
+Rules:
+- Do not change this order for full runs.
+- Partial scope (`build only`, `feature only`, `bugfix only`) still follows tool order `rg -> grep -> idx`.
+- Keep phase continuity inside each tool (never clean between build -> feature -> bugfix for the same tool).
+
+Each branch contains only the changes for that phase and tool combination.
+Phases within the same tool are sequential: the feature branch extends the build, and the bugfix branch extends the feature.
+Do not reuse sandbox artifacts across different tools (idx sandbox is independent from grep sandbox).
+After all three phases for a tool are complete and metrics are recorded, delete those three branches locally.
+Branches exist only for statistical traceability during the session.
+
+## idx Setup and Usage Reference
+
+The benchmark sessions that use idx must follow the exact commands below.
+The AGENTS.md of this project forbids using grep or rg inside the project itself,
+but the benchmark target project (student registration CLI) is a separate codebase
+where the session tool restriction applies — follow only the tool rule for that session.
+
+The `idx` binary is installed at `~/.local/bin/idx` and available globally in the shell.
+Use the `idx` command directly for all idx operations during the session.
+
+Set this path once per session:
+
+```bash
+TARGET_ROOT=/tmp/idx-benchmark/<run-id>/<tool-phase>/studentreg
+```
+
+Use the command patterns below. Commands that must operate on the benchmark target project
+use a subshell that changes to `TARGET_ROOT`.
+
+All `idx search` invocations in benchmark sessions must include `--agent-compact`
+to reduce token usage consistently across idx scenarios.
+
+### Context-reduction filters (Mandatory when known)
+
+To reduce unnecessary files in context during `idx search`:
+
+- **Always pass `--size 2`** on every `idx search` invocation. idx ranks results by relevance, so the top 2 are sufficient as a first pass. If the needed result is not in the first page, paginate using `--from <offset> --size 2` to fetch the next page. Do not increase `--size` beyond 2 unless pagination has been exhausted and the target is confirmed absent.
+  - Example first page: `idx search "password hash" --size 2 --agent-compact`
+  - Example next page:  `idx search "password hash" --size 2 --from 2 --agent-compact`
+- If you know the file extension being targeted, always add `--ext <extension>`.
+  - Example: `idx search "password hash" --ext go --size 2 --agent-compact`
+- If you know the likely path or exact file path, always add `--path <path-filter>`.
+  - You may use wildcards for file targeting when applicable.
+  - Example: `idx search "list command" --path "*main.go" --size 2 --agent-compact`
+
+When both are known, combine both filters in the same search command:
+- Example: `idx search "TestPasswordIsHashed" --path "*main_test.go" --ext go --size 2 --agent-compact`
+
+```bash
+idx daemon enable "$TARGET_ROOT"
+(cd "$TARGET_ROOT" && idx search "<terms>" --size 2 --agent-compact)
+(cd "$TARGET_ROOT" && idx search "<terms>" --size 2 --from <offset> --agent-compact)
+(cd "$TARGET_ROOT" && idx search "<terms>" --files-only --size 2 --agent-compact)
+(cd "$TARGET_ROOT" && idx search "<terms>" --matches-only --size 2 --agent-compact)
+(cd "$TARGET_ROOT" && idx search "<terms>" --path <path-filter> --size 2 --agent-compact)
+(cd "$TARGET_ROOT" && idx search --path <path-filter> --size 2 --agent-compact)
+(cd "$TARGET_ROOT" && idx search "<terms>" --ext <extension> --size 2 --agent-compact)
+(cd "$TARGET_ROOT" && idx search --path <path-filter> --ext <extension> --size 2 --agent-compact)
+(cd "$TARGET_ROOT" && idx search "<terms>" --format json --size 2 --agent-compact)
+(cd "$TARGET_ROOT" && idx search "<terms>" --format json --json-pretty --size 2 --agent-compact)
+(cd "$TARGET_ROOT" && idx search "<terms>" --format json --matches-only --size 2 --agent-compact)
+(cd "$TARGET_ROOT" && idx search "<terms>" --format json --files-only --size 2 --agent-compact)
+(cd "$TARGET_ROOT" && idx search "<terms>" --explain --size 2 --agent-compact)
+(cd "$TARGET_ROOT" && idx search "<terms>" --context <lines> --size 2 --agent-compact)
+(cd "$TARGET_ROOT" && idx search "<terms>" --operator OR --size 2 --agent-compact)
+(cd "$TARGET_ROOT" && idx search "<terms>" --operator AND --relaxation '>N' --size 2 --agent-compact)
+(cd "$TARGET_ROOT" && idx sync)
+(cd "$TARGET_ROOT" && idx status)
+```
+
+Before testing idx and before starting the session timer, run the single pre-step:
+
+```bash
+idx daemon enable "$TARGET_ROOT" --quiet
+```
+
+`daemon enable` is idempotent: it auto-inits the index when missing and exits 0 if the daemon is already running.
+`--quiet` suppresses informational confirmations from entering the agent context window (errors still go to stderr).
+No separate `idx init` or `idx daemon status` call is needed.
+
+The `idx daemon enable "$TARGET_ROOT" --quiet` step belongs to the `pre_build` token stage.
+It must be measured and reported in the stage ledger even when it is excluded from `implementation_total_*`.
+
+After filesystem changes, resync:
+
+```bash
+(cd "$TARGET_ROOT" && idx sync --quiet)
+```
+
+Count a `tool_search_count` interaction for every `search` invocation.
+Count a `tool_navigation_count` interaction for every file opened as a direct result of a search hit.
+For idx sessions, this counting rule applies only to `idx search` calls that include `--agent-compact`.
+
+## Session Isolation Rules
+Scenario definition for this skill:
+- One scenario = one tool + one phase session (for example: rg-build, grep-feature, idx-bugfix).
+
+For every phase in every branch:
+1. Start a fresh conversation context before beginning the phase.
+2. Do not reuse previous chat history for that phase.
+3. Execute only the session's target search approach:
+- rg branch: use rg only.
+- grep branch: use grep only.
+- idx branch: use `idx search ... --agent-compact` commands only.
+4. Capture timestamps, interaction counts, and context consumption during that session.
+5. If context was not reset before the scenario, invalidate the scenario and rerun it with a fresh context.
+
+For every new invocation of this skill (full or partial scope):
+1. Treat the execution as a first-time run.
+2. Ignore prior benchmark interaction context, prior chat-derived optimizations, and prior tool usage patterns.
+3. Recreate the benchmark flow from scratch instead of continuing from previous session state.
+4. Prioritize simulation fidelity over metric outcomes; metrics are directional signals, not optimization targets.
+5. Do not use previous run metrics to influence implementation decisions during the current run.
+
+### Hard Reset Rule (Mandatory)
+- Every execution of this skill MUST rerun the benchmark again for the requested scope.
+- Never reuse metrics, timings, token counters, interaction counters, branches, or sandbox artifacts from any previous run.
+- Never copy prior benchmark numbers into a new report section.
+- If any previous-run artifact is detected as input to the current run, invalidate the scenario and rerun it from scratch.
+- "Run from scratch" means: new run_id, fresh sandbox under `/tmp/idx-benchmark/<new-run-id>/`, fresh per-phase sessions, and newly measured (or newly estimated) token/context metrics.
+
+## Agent Interactive Execution Mode (Mandatory)
+This benchmark must be executed in interactive agent mode, step by step.
+
+Required:
+- Execute commands and edits interactively, one step at a time, as part of the live session flow.
+- Keep per-step traceability so each interaction can be counted and audited.
+- Treat every command relevant to the session timeline as part of the simulation record.
+
+Forbidden:
+- Creating or using automation scripts (for example .sh files) to batch benchmark phases.
+- Running bundled command blocks that skip observable intermediate steps.
+- Replaying previously generated automation artifacts to fast-forward sessions.
+
+Invalidation rule:
+- If script-based or batched automation is used for a session, mark that session invalid and rerun it in interactive mode.
+
+Total sessions in full benchmark:
+- 9 sessions (3 branches x 3 phases)
+
+## Per-Session Procedure
+1. Record metadata
+- branch name
+- phase name
+- session tool
+- session start timestamp
+
+Pre-step before recording session start timestamp:
+- Run `idx daemon enable "$TARGET_ROOT" --quiet` (idempotent: auto-inits if needed, exits 0 when already monitoring; `--quiet` keeps confirmations out of context).
+- Record this step under the `pre_build` token stage.
+- Only start the implementation timer for the phase after the command completes.
+
+2. Implement the required phase changes
+- keep scope limited to the current phase
+- add tests for new behavior and regressions when applicable
+
+3. Validate
+- run project tests
+- run manual CLI checks for phase behavior
+
+4. Record completion data
+- session end timestamp
+- session duration
+- number of interactions using the session tool
+- context usage metrics for the scenario (prompt/input, completion/output, and total when available)
+- token usage metrics for every workflow stage: `pre_build`, `build`, `feature`, `bugfix`
+- workflow totals across all stages
+- implementation totals across `build`, `feature`, and `bugfix`
+- token metric source: `measured` | `estimated` | `unavailable`
+- result status (pass/fail)
+
+## Metrics Logging Format
+Use one row per session with this schema:
+- run_id
+- branch
+- phase (build | feature | bugfix)
+- tool (rg | grep | idx)
+- started_at
+- finished_at
+- duration_seconds
+- tool_search_count
+- tool_navigation_count
+- context_input_tokens
+- context_output_tokens
+- context_total_tokens
+- token_stage_pre_build_input
+- token_stage_pre_build_output
+- token_stage_pre_build_total
+- token_stage_build_input
+- token_stage_build_output
+- token_stage_build_total
+- token_stage_feature_input
+- token_stage_feature_output
+- token_stage_feature_total
+- token_stage_bugfix_input
+- token_stage_bugfix_output
+- token_stage_bugfix_total
+- workflow_total_input_tokens
+- workflow_total_output_tokens
+- workflow_total_tokens
+- implementation_total_input_tokens
+- implementation_total_output_tokens
+- implementation_total_tokens
+- token_metrics_source
+- token_metrics_notes
+- tests_passed
+- notes
+
+Group the final comparison report by problem (phase), not by tool, so each phase produces an independent side-by-side comparison across the three tools.
+
+Recommended run_id format:
+- rg-build-001
+- rg-feature-001
+- rg-bugfix-001
+- grep-build-001
+- grep-feature-001
+- grep-bugfix-001
+- idx-build-001
+- idx-feature-001
+- idx-bugfix-001
+
+Per-session schema must include both interaction counters:
+- tool_search_count (direct search command invocations)
+- tool_navigation_count (file reads/jumps triggered by search results)
+
+Per-session schema must include context counters per scenario:
+- context_input_tokens
+- context_output_tokens
+- context_total_tokens
+
+Per-session schema must also include stage-level token counters:
+- token_stage_pre_build_input
+- token_stage_pre_build_output
+- token_stage_pre_build_total
+- token_stage_build_input
+- token_stage_build_output
+- token_stage_build_total
+- token_stage_feature_input
+- token_stage_feature_output
+- token_stage_feature_total
+- token_stage_bugfix_input
+- token_stage_bugfix_output
+- token_stage_bugfix_total
+- workflow_total_input_tokens
+- workflow_total_output_tokens
+- workflow_total_tokens
+- implementation_total_input_tokens
+- implementation_total_output_tokens
+- implementation_total_tokens
+- token_metrics_source
+- token_metrics_notes
+
+Stage accounting rule:
+- `workflow_total_*` is the sum of `pre_build + build + feature + bugfix`
+- `implementation_total_*` is the sum of `build + feature + bugfix`
+- `context_total_tokens` may match the phase-local slice, but it does not replace the stage ledger
+
+## Tool Interaction Counting Rules
+Count two categories of interactions separately.
+
+Search interactions (direct tool use):
+- idx session: increment this counter only for `idx search` invocations that include `--agent-compact`
+- grep session: each grep command increments this counter
+- rg session: each rg command increments this counter
+
+Navigation interactions (tool-driven exploration):
+- File reads or directory listings triggered as a direct result of a search hit
+- Symbol lookups or go-to-definition jumps initiated because of a search result
+- Opening a file to read context lines around a match
+
+Record both counts per session:
+- tool_search_count
+- tool_navigation_count
+
+Do not count:
+- idx commands other than search (`idx init`, `idx sync`, `idx status`, `idx daemon ...`, `idx version`)
+- git commands
+- test commands
+- formatter or lint commands
+- file reads with no relationship to a search result
+
+## Decision Rules
+- If behavior differs across branches, prefer correctness first, then speed.
+- If a phase fails validation, mark run as fail and record root cause.
+- If scope argument is partial, execute only requested phases.
+- If any branch changes requirements, restart that phase in all branches.
+- For a new skill invocation, reset execution assumptions and avoid carrying over prior interaction memory to reduce benchmark bias.
+- If execution mode is not interactive agent mode, discard the run and restart in interactive mode.
+- If current metrics are derived from previous benchmark executions instead of newly executed sessions, mark the run invalid and rerun all requested phases.
+
+## Quality Checks
+- Same workload and acceptance criteria across all branches.
+- Same phase order across all branches.
+- Full benchmark tool order is `rg -> grep -> idx`.
+- Fresh context before every phase.
+- One target search tool per session.
+- Interactive agent execution mode used end-to-end (no scripts, no batch shortcuts).
+- Benchmark target project lives under `/tmp/idx-benchmark/`.
+- Every idx session runs `idx daemon enable "$TARGET_ROOT" --quiet` as the sole pre-step before starting session timing (idempotent: handles init and daemon start in one command).
+- All idx session commands use the `idx` binary available in the shell (`~/.local/bin/idx`).
+- Every idx session `search` invocation includes `--agent-compact`.
+- Every idx session `search` invocation includes `--size 2`. Pagination via `--from <offset> --size 2` is used when the target result is not in the first page; `--size` is never increased beyond 2.
+- Start/end timestamps recorded for every session.
+- Both tool_search_count and tool_navigation_count recorded for every session.
+- Context reset performed for every scenario before measurement starts.
+- Context token metrics (input/output/total) recorded for every session.
+- Token stage metrics recorded for every session and every tool workflow.
+- `workflow_total_tokens` must be present and non-zero when token consumption occurred.
+- `implementation_total_tokens` must be present and non-zero when implementation work occurred.
+- Every session must include `token_metrics_source` (`measured` or `estimated`; `unavailable` only when explicitly blocked).
+- Tests executed and status recorded for every session.
+- bcrypt usage validated in all three bugfix sessions.
+- Branches for a tool deleted only after all three phases of that tool are complete and metrics are recorded.
+- Sandbox directory for a tool deleted only after its bugfix phase is complete and metrics are recorded.
+- Sandbox never cleaned between phases of the same tool (build → feature → bugfix share artifacts).
+- Sandbox fully empty (or placeholder-only) confirmed before finishing the skill.
+- Current run metrics are newly produced by this invocation and were not reused from previous benchmark executions.
+
+## Deliverables
+- Code delivered on each branch during its session.
+- Branch deleted after session metrics are recorded.
+- Session metrics table for all executed runs.
+- Final comparison report written as a Markdown file at:
+
+  `docs/benchmarks/idx-vs-grep-rg.md`
+
+  The file must contain the following sections:
+
+  ### Build phase comparison (rg vs grep vs idx)
+  Table with columns: tool, duration_seconds, tool_search_count, tool_navigation_count, context_total_tokens, tests_passed, notes
+
+  ### Feature phase comparison (rg vs grep vs idx)
+  Same table structure as build phase.
+
+  ### Bugfix phase comparison (rg vs grep vs idx)
+  Same table structure plus a column: bcrypt_validated (yes/no)
+
+  ### Summary
+  - Total duration per tool (sum across all phases)
+  - Total tool_search_count per tool
+  - Total tool_navigation_count per tool
+  - Total context_input_tokens per tool
+  - Total context_output_tokens per tool
+  - Total context_total_tokens per tool
+  - Total workflow_total_input_tokens per tool
+  - Total workflow_total_output_tokens per tool
+  - Total workflow_total_tokens per tool
+  - Total implementation_total_input_tokens per tool
+  - Total implementation_total_output_tokens per tool
+  - Total implementation_total_tokens per tool
+  - Overall pass/fail rate per tool
+- Token breakdown by workflow stage per tool with the exact stages:
+  - `pre_build`
+  - `build`
+  - `feature`
+  - `bugfix`
+- A dedicated section named `Token Breakdown By Session Stage` with columns:
+  - tool
+  - pre_build_total_tokens
+  - build_total_tokens
+  - feature_total_tokens
+  - bugfix_total_tokens
+  - workflow_total_tokens
+  - implementation_total_tokens
+- Methodology note: for idx sessions, `tool_search_count` includes only `idx search` invocations that include `--agent-compact`.
+  - Methodology note: for idx sessions, every `idx search` invocation includes `--agent-compact` to reduce token usage consistently across runs.
+  - Methodology note: for idx sessions, every `idx search` invocation includes `--size 2`. idx ranks results by relevance so the top 2 are sufficient as a first pass; subsequent pages are fetched with `--from <offset> --size 2` only when the target is not in the first page. This limits context growth while preserving recall.
+  - Methodology note: for idx sessions, `idx daemon enable "$TARGET_ROOT" --quiet` is the sole pre-step (idempotent: handles init + daemon start). No separate `idx init` or `idx daemon status` call is made before timing.
+  - Methodology note: `pre_build` tokens are reported explicitly in the stage ledger and included in `workflow_total_tokens`.
+  - Methodology note: fairness comparisons across tools should use `implementation_total_tokens`, not `workflow_total_tokens`, when pre-step overhead must be isolated.
+  - Methodology note: each scenario starts from a fresh context; context token counters must be measured only after this reset and never carried across scenarios.
+  - Methodology note: token metrics must include a provenance marker (`measured`, `estimated`, or `unavailable`) and explanation in notes when not measured.
+  - Methodology note: when telemetry is absent, per-session tokens are calculated from transcript tokenization and clearly labeled as estimates.
+  - Qualitative observations and highlights
+
+  If the file already exists, append or update the relevant sections without removing prior benchmark runs.
+
+- Post-run cleanup confirmation:
+  - Sandbox cleaned per-tool: each tool's sandbox directory is removed only after its bugfix phase completes.
+  - Never cleaned between phases of the same tool — build → feature → bugfix share the same sandbox.
+  - `/tmp/idx-benchmark/` is removed after all tool sessions finish.
+
+## Completion Criteria
+This skill is complete when:
+- All requested phases are executed for each selected branch.
+- Every session has timing and interaction metrics captured.
+- All phase outcomes are validated.
+- A final comparison report is produced.
+
+## Example Prompts
+- Run a full benchmark with rg vs grep vs idx and produce the final metrics table.
+- Run only the bugfix phase benchmark for all three branches.
+- Benchmark build and feature phases only, then summarize speed and interaction counts.

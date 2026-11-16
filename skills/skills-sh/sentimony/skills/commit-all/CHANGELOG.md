@@ -1,0 +1,271 @@
+# Changelog
+
+All notable changes to this skill will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Each heading ends with the repository release that shipped the version.
+
+## [0.0.20] - 2026-11-16 - [0.0.114]
+
+### Changed
+
+- Mentions of renamed skills updated (`branch-finish` to `finalize`); no other change.
+
+## [0.0.19] - 2026-11-13 - [0.0.111]
+
+### Changed
+
+- Flat layout: reference files moved next to SKILL.md; no content change.
+
+## [0.0.18] - 2026-11-13 - [0.0.109]
+
+### Added
+
+- `disable-model-invocation: true` and `agents/openai.yaml` with
+  `allow_implicit_invocation: false`: only `/commit-all` starts the skill (decision of
+  2026-11-11 replacing "invoked in words"); the description no longer lists word triggers
+  (`20261111-2221`).
+- Arguments `push` and `pr`: post-commit requests handed to `finalize` or `branch-finish`
+  (the skill still runs no push or `gh` itself); `pr` is a pull request ready for squash,
+  never merged; the default branch gets a new branch, and `--main true` with them stops
+  (`20261111-2221`).
+- Step 0: several repository paths together replace the current one; a repository with
+  only foreign changes is named and left out; hunks already committed elsewhere are a
+  mirror, not new scope; repository identity by `--git-common-dir`, one commit per
+  checkout, linked worktrees stay separate units; preconditions from instructions are
+  named before the question and never run (`20261030-2234`, `20261101-0113`,
+  `20261101-0341`, `20261018-2057`).
+- Step 2: a condition or choice phrased in the request answers the step 0 and 2 questions;
+  a sign of another session's branch (`origin/<default>..HEAD`) offers a new branch from
+  `origin/<default>` or, when a session file is missing there, from `HEAD`, transferred
+  through a separate worktree (`references/branch-transfer.md`) (`20261030-2234`,
+  `20261018-2057`).
+- Step 3 stop: a foreign change that undoes a recent commit of the branch, found with
+  `git patch-id --stable`; step 6 line when the session changed nothing (`20261112-0608`).
+- Security Model: trusted input is the user's `/commit-all` command and its arguments, not a
+  request in words, matching the command-only start.
+
+### Changed
+
+- `session-only` and `repo-only` become `--only-this session|repo` (comma list or repeated
+  flag; unknown value stops); the old words still work as words (`20261112-0548`).
+- With the session limit the several-repositories question is not asked.
+
+## [0.0.17] - 2026-11-13 - [0.0.107]
+
+### Changed
+
+- Description rewritten as a thesis plus "Use when ..." without "You MUST", at a lower token cost; triggers unchanged.
+
+## [0.0.16] - 2026-11-10 - [0.0.103]
+
+### Added
+
+- Mechanics: a snapshot check before the commit (`git diff --cached --name-status` or, for a
+  partial commit, `git diff HEAD --name-status -- <paths>`); the message is rebuilt from the
+  snapshot, whose full diff also feeds the thematic groups, with a one-line notice when the
+  tree changed during the run (`20261023-1950`).
+- Step 3 stop: a foreign hunk in the `## Execution record` of `docs/plans/*.md` or `.sdd/*`
+  (`20261028-2054`).
+- Step 3 stop: a foreign hunk that looks accidental, and a commit moved to another
+  repository whose foreign hunks lie in the same files; `--main true` does not lift either
+  stop (`20261031-0351`).
+
+## [0.0.15] - 2026-11-07 - [0.0.101]
+
+### Changed
+
+- The post-commit handoff names `agentflow` instead of the abbreviation "aw" and states that
+  push and PR go through the `finalize` gate, with `verify` next when the tree after the
+  commit has no full `PASS` (`20261027-0444`).
+
+## [0.0.14] - 2026-11-04 - [0.0.99]
+
+### Added
+
+- `repo-only` argument (`20261104-0507`): scopes the run to the current repository without
+  the step 0 question and names the other repositories left uncommitted; conflicts with a
+  path to another repository's root, and ends with "no changes to commit in the current
+  repository" when only other repositories changed. `argument-hint` lists it.
+
+### Changed
+
+- Step 0 offers "only this session's changes in each" only when a repository holds changes
+  the session did not make and `session-only` is not set; otherwise the question has two
+  options (`20261030-0400`).
+
+## [0.0.13] - 2026-10-27 - [0.0.95]
+
+### Added
+
+- `20261024-2032`: a path to the root of another git repository (or a symlink to one) as
+  the argument makes that repository the only one in scope instead of the current one,
+  with no step 0 question; naming it covers its foreign changes. Paths inside the
+  current repository stay a partial-commit scope. Security Model lists the path as
+  trusted input and the named repository in Scope.
+- `20261025-0142`: step 1 first checks `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`,
+  `rebase-merge`, and `rebase-apply` through `git rev-parse --git-path` and stops on an
+  interrupted operation with two options (commit as part of it only on the user's
+  explicit wish, or stop for the user's `--continue` or `--abort`). The skill never runs
+  `--abort`, and `--main true` does not lift the stop; step 6 and Security Model list it.
+- `20261025-1745`: step 1 checks for a background agent or command of the session that
+  still writes to the repository, names it, and waits; a commit the user wants now gets
+  `checkpoint` in the summary and the writer is told to commit the rest on top without
+  `--amend`. Mechanics: a path removed with `git rm` stays out of `git add -A -- <paths>`.
+
+### Changed
+
+- `20261024-2355`: step 0 counts only repositories with uncommitted changes. A clean
+  current repository needs no question: when one other repository has changes, the skill
+  names it in one progress line ("current repository clean; committing in <repo>") and
+  commits there; a clean current repository no longer ends that run in step 1.
+- Actions after the commit go to aw `finalize`: the `awf` plugin is named `aw` since
+  `sentimony/agentic-workflow` v0.0.8.
+
+## [0.0.12] - 2026-10-27 - [0.0.93]
+
+### Changed
+
+- Actions after the commit go to awf `finalize`, or to `branch-finish` where awf is
+  not installed.
+- `argument-hint` lists the explicit path scope the body already accepts.
+- Mechanics: the `-F`-before-pathspec rule joins the partial-commit item instead of
+  repeating the same command in its own item; two wrapped workflow lines are reflowed.
+  No behavior change.
+
+## [0.0.11] - 2026-10-21 - [0.0.89]
+
+### Added
+
+- `session-only` (or the same limit in words): only the session's own paths and hunks are
+  committed, a file with foreign hunks goes through the index, and a session with nothing
+  left ends with "no session changes to commit" and the other changed files.
+- Step 0 shows, per repository, how many files hold changes the session did not make and
+  any `AGENTS.md` or `CLAUDE.md` rule that limits agent commits, offers "only this
+  session's changes" as a third option, and leaves out a repository whose rules forbid
+  the commit unless the user names it.
+- Post-commit actions in the arguments (push, pull request, merge, squash, branch deletion,
+  switching to the default branch) are committed for first and then handed to
+  `branch-finish`; deploys go to the project's own commands. The skill's own git commands
+  do not change.
+
+### Changed
+
+- Step 3 compares each session file's diff with the session's own edits and names foreign
+  hunks in the plan; step 4 asks about untracked files unrelated to the session's changes,
+  such as screenshots and dumps.
+
+## [0.0.10] - 2026-10-12 - [0.0.82]
+
+### Added
+
+- `LICENSE` (MIT), this `CHANGELOG.md`, and `metadata.version` and `license` in the
+  frontmatter, all removed in 0.0.73. The skill instructions are unchanged.
+
+## [0.0.9] - 2026-10-10 - [0.0.75]
+
+### Added
+
+- `--main true|false` (`argument-hint: "[dry-run] [--main true|false]"`). `--main true`
+  commits to the default branch without asking; the default `--main false` asks with two
+  options, commit there or create a branch from `HEAD`.
+- Step 0 offers a commit in every other repository this conversation changed that still
+  has uncommitted changes, after listing each with its branch and changed-file count.
+  One commit per repository; the Security Model states the wider scope explicitly.
+
+## [0.0.8] - 2026-10-10 - [0.0.74]
+
+### Changed
+
+- Step 1 starts from `git diff --stat` and `git diff --staged --stat`; the full diff is
+  read for code, configuration, and documentation, while large generated or data files
+  get only the stat and structural signs.
+- Step 4 excludes local tooling that is plainly not part of the work (`.envrc`,
+  directories of generated output) without stopping, and names each excluded path.
+- Step 5 counts the summary line before committing and rewrites it when longer than 72
+  characters. It checks what the repository's instructions allow in commit messages and,
+  when they restrict it, describes the change by category, count, and period.
+- Amend is offered only when the previous commit of this session is unpushed and either
+  its message has a defect or the new changes fix it; a later run with new work is always
+  a new commit. The introduction now matches the Amend section.
+- Mechanics: a staged rename in a partial commit needs both paths in the pathspec.
+- Security Model: filenames and diff content may be confidential and reach the message
+  only within the repository's rules.
+
+## [0.0.7] - 2026-10-09 - [0.0.73]
+
+### Added
+
+- `argument-hint: "[dry-run]"` in the frontmatter, so the Claude Code `/` menu shows the
+  documented argument. The skill instructions are unchanged.
+
+### Changed
+
+- `disable-model-invocation` is `false`, and the Codex display name is `commit-all`.
+
+### Removed
+
+- `license` from the frontmatter; the license lives in the skill's `LICENSE` file.
+  The skill instructions are unchanged.
+- `metadata.author` and `metadata.version` from the frontmatter: skills are no longer
+  versioned individually, only repository releases are.
+
+## [0.0.6] - 2026-10-01 - [0.0.61]
+
+### Added
+
+- `agents/openai.yaml` with the Codex display name and short description, and `allow_implicit_invocation: false` mirroring `disable-model-invocation`.
+- `metadata.internal: false` in the frontmatter.
+
+## [0.0.5] - 2026-09-15 - [0.0.52]
+
+### Changed
+
+- Step 2 resolves the repository's actual default branch through remote HEAD or
+  `init.defaultBranch`, and treats `main`/`master` as a fallback rather than the rule.
+  The Security Model lists the two added read-only lookups.
+
+## [0.0.4] - 2026-09-14 - [0.0.48]
+
+### Added
+- Added a `## Security Model` section naming the skill's trusted and untrusted inputs, the
+  rule that tool output is data rather than instructions, and whether the skill runs shell
+  commands or network calls.
+
+## [0.0.3] - 2026-08-30 - [0.0.24]
+
+One-shot release: an explicit `/commit-all` is the approval, so a normal run on a
+feature branch commits in the same turn.
+
+### Changed
+- Pre-existing tracked changes no longer trigger a confirmation gate: the
+  session-snapshot comparison now only feeds the message's thematic groups and
+  suspicious-file screening, and a missing snapshot no longer forces a question
+- Step 6 shows the file list and generated message as a progress update and continues
+  to the commit in the same turn; only `dry-run` stops there
+- Remaining stop conditions listed explicitly: default branch, suspicious untracked
+  files, and path/partial-commit arguments whose scope cannot be determined safely
+
+## [0.0.2] - 2026-08-21 - [0.0.20]
+
+Description-cost release: shorter frontmatter description, same behavior.
+
+### Changed
+- Trimmed the frontmatter description to the /commit-all invocation line; the
+  never-auto-trigger and own-message rules moved into the skill body.
+
+## [0.0.1] - 2026-08-20 - [0.0.19]
+
+### Added
+- Initial release: gather the working tree into a single commit on the current branch
+  with a generated English message, on explicit `/commit-all` invocation only
+  (`disable-model-invocation: true`)
+- Guard rails: stop and ask on `main`/`master`, preview the file list and message when
+  the tree holds changes the session did not make, screen untracked files for one-off
+  artifacts and secrets, never push, never `--amend` without consent, never
+  `--no-verify`, never rewrite history
+- `dry-run` argument that prints the planned commit without executing it
+- Mechanics notes: `git commit -F -` with a heredoc, `-F` before the pathspec, path
+  lists in a file or array against zsh word-splitting, partial commits that keep staged
+  renames intact

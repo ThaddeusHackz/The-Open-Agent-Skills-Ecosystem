@@ -1,0 +1,32 @@
+---
+name: g0atbot-twitter-threads
+description: AI 驱动的 Twitter 帖子串创建工具。将任何主题转化为引人入胜的病毒式传播帖子串。
+---
+
+# Twitter Thread Generator
+
+AI-powered Twitter thread creator. Turn any topic into engaging viral threads.
+
+## What It Does
+- Topic input → Thread output
+- Hook optimization
+- Engagement hooks per tweet
+- Thread formatting
+- Auto-posting ready
+
+## Setup
+```bash
+pip install openai
+export OPENAI_API_KEY="your_key"
+```
+
+## Usage
+```bash
+python thread_gen.py --topic "5 tips for fitness" --length 10
+```
+
+## Features
+- Viral hooks library
+- Thread structure templates
+- Engagement optimization
+- Thread analytics

@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Language schemas shared by DeepPaperNote contracts and validators.
+
+`sections` holds the fixed head and tail sections; the middle sections come
+from the paper type (see type_profiles.py).
+"""
+
+from __future__ import annotations
+
+import os
+from copy import deepcopy
+from typing import Any
+
+DEFAULT_OUTPUT_LANGUAGE = "zh-CN"
+SUPPORTED_OUTPUT_LANGUAGES = ("zh-CN", "en")
+_ALIASES = {"zh": "zh-CN", "zh-cn": "zh-CN", "zh_cn": "zh-CN", "chinese": "zh-CN", "en": "en", "en-us": "en", "en_us": "en", "english": "en"}
+_SCHEMAS: dict[str, dict[str, Any]] = {
+    "zh-CN": {
+        "sections": {"core_information": "核心信息", "abstract": "原文摘要翻译", "contributions": "创新点", "one_sentence_summary": "一句话总结", "limitations": "局限", "takeaways": "阅读收获", "connections": "关联", "my_notes": "我的笔记"},
+        "core_info_fields": ("标题", "标题翻译", "作者", "机构", "发表时间", "发表渠道", "DOI", "arXiv", "论文链接", "代码 / 项目", "数据 / 资源", "论文类型"),
+        "core_info_aliases": {},
+        "figure_labels": {"location": "建议位置：", "reason": "放置原因：", "status": "当前状态：", "original_caption": "论文原图编号："},
+        "takeaways_subsections": {"transferable": "可迁移", "next_steps": "下一步"},
+        "takeaways_judgment_marker": "判断：",
+        "takeaways_max_item_chars": 120,
+        "connections_subsections": {"in_vault": "库内笔记", "key_prior_work": "关键前置文献"},
+        "connections_relation_labels": {"baseline": "基线/对比", "extends": "扩展了它", "extended_by": "被本文扩展", "same_task": "同一任务", "same_benchmark": "同一数据集/基准", "shared_method": "方法同源", "conflicting_findings": "结论冲突"},
+        "connections_empty_statements": {"no_match": "库里暂无相关笔记", "workspace": "当前为 workspace 模式，未连接知识库"},
+        "my_notes_guidance": "> [!note] 这一节留给你自己：写下你的判断、它和你研究的联系、想验证的点。重新生成这篇笔记时，这一节会原样保留。",
+    },
+    "en": {
+        "sections": {"core_information": "Core Information", "abstract": "Abstract", "contributions": "Contributions", "one_sentence_summary": "One-Sentence Summary", "limitations": "Limitations", "takeaways": "Takeaways", "connections": "Connections", "my_notes": "My Notes"},
+        "core_info_fields": ("Title", "Translated title", "Authors", "Institutions", "Publication date", "Venue", "DOI", "arXiv", "Paper link", "Code / Project", "Data / Resources", "Paper type"),
+        "core_info_aliases": {},
+        "figure_labels": {"location": "Suggested location:", "reason": "Why it matters:", "status": "Current status:", "original_caption": "Original paper item:"},
+        "takeaways_subsections": {"transferable": "Transferable Ideas", "next_steps": "Next Steps"},
+        "takeaways_judgment_marker": "Judgment:",
+        "takeaways_max_item_chars": 320,
+        "connections_subsections": {"in_vault": "In Your Vault", "key_prior_work": "Key Prior Work"},
+        "connections_relation_labels": {"baseline": "baseline", "extends": "extends", "extended_by": "extended by", "same_task": "same task", "same_benchmark": "same benchmark", "shared_method": "shared method", "conflicting_findings": "conflicting findings"},
+        "connections_empty_statements": {"no_match": "No related notes in your vault yet.", "workspace": "Workspace mode: not connected to a vault."},
+        "my_notes_guidance": "> [!note] This section is yours: write down your own judgments, how the paper connects to your research, and what you want to verify. When this note is regenerated, this section is kept exactly as it is.",
+        "abstract_contract": {
+            "source": "source_abstract",
+            "requirement": "faithful_rendering_in_output_language",
+            "forbidden_additions": [
+                "later_contribution_claims",
+                "later_result_interpretation",
+                "hindsight_judgment",
+            ],
+        },
+    },
+}
+
+def normalize_output_language(value: str | None = None) -> str:
+    raw = (value if value is not None else os.environ.get("DEEPPAPERNOTE_OUTPUT_LANGUAGE", "")).strip()
+    if not raw:
+        return DEFAULT_OUTPUT_LANGUAGE
+    normalized = _ALIASES.get(raw.lower(), raw)
+    if normalized not in SUPPORTED_OUTPUT_LANGUAGES:
+        raise ValueError(f"Unsupported DeepPaperNote output language: {raw}. Choose one of: {', '.join(SUPPORTED_OUTPUT_LANGUAGES)}.")
+    return normalized
+
+
+def require_artifact_output_language(
+    artifact: dict[str, Any],
+    artifact_name: str,
+    expected: str,
+) -> str:
+    language = artifact.get("output_language")
+    if language not in SUPPORTED_OUTPUT_LANGUAGES:
+        raise ValueError(
+            f"{artifact_name} requires output_language with one of: "
+            f"{', '.join(SUPPORTED_OUTPUT_LANGUAGES)}."
+        )
+    resolved = normalize_output_language(expected)
+    if language != resolved:
+        raise ValueError(
+            f"{artifact_name} output_language {language} does not match "
+            f"resolved output_language {resolved}."
+        )
+    return str(language)
+
+def note_schema(language: str | None = None) -> dict[str, Any]:
+    return deepcopy(_SCHEMAS[normalize_output_language(language)])

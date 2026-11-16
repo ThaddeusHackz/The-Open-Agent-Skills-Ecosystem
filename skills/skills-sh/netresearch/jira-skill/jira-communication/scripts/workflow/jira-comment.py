@@ -1,0 +1,513 @@
+#!/usr/bin/env -S uv run --script
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Netresearch DTT GmbH
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "atlassian-python-api>=3.41.0,<4",
+#     "click>=8.1.0,<9",
+#     "requests>=2.31,<3",
+# ]
+# ///
+"""Jira comment operations - add, edit, delete, and list issue comments."""
+
+import sys
+from pathlib import Path
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Shared library import (TR1.1.1 - PYTHONPATH approach)
+# ═══════════════════════════════════════════════════════════════════════════════
+_script_dir = Path(__file__).parent
+_lib_path = _script_dir.parent / "lib"
+if _lib_path.exists():
+    sys.path.insert(0, str(_lib_path.parent))
+
+import click
+from lib.client import LazyJiraClient, _sanitize_error, fetch_comments_paginated
+from lib.input import read_stdin_utf8
+from lib.markup_cli import MarkupGates, guard_wiki_markup, markup_options
+from lib.output import error, extract_adf_text, format_output, success, warning
+from lib.ticket_state import print_ticket_state, warn_if_unclaimed, with_ticket_state
+from lib.users import check_mentions_cli, person_label
+
+
+def _read_comment_text(comment_text: str, usage: str) -> str:
+    """Return the comment body, reading stdin when the argument is ``-``.
+
+    Extracted because `add` and `edit` carried a byte-identical copy of this
+    apart from the usage line, and the pre-flight check pushed both functions
+    past the cognitive-complexity gate.
+    """
+    if comment_text != "-":
+        return comment_text
+
+    if sys.stdin.isatty():
+        error("'-' requires piped input but stdin is a terminal", suggestion=usage)
+        sys.exit(1)
+
+    max_size = 256 * 1024  # 256KB, above Jira's comment limit
+    try:
+        comment_text = read_stdin_utf8(max_size + 1)
+    except UnicodeDecodeError:
+        error(
+            "stdin contains invalid text encoding (expected UTF-8)",
+            suggestion="Ensure the piped file is valid UTF-8 text, not binary data.",
+        )
+        sys.exit(1)
+
+    if len(comment_text) > max_size:
+        error(
+            f"stdin input exceeds maximum size ({max_size // 1024}KB)",
+            suggestion="Jira comments have size limits. Consider attaching the content as a file.",
+        )
+        sys.exit(1)
+
+    comment_text = comment_text.rstrip("\n")
+
+    if not comment_text.strip():
+        error(
+            "No input received from stdin (empty or whitespace-only)",
+            suggestion="Verify your piped command produces non-empty output.",
+        )
+        sys.exit(1)
+
+    return comment_text
+
+
+DRY_RUN_HELP = "Print the comment as it would be posted, after the escape and the lint, without posting it"
+
+VISIBILITY_TYPES = ("role", "group")
+
+
+def _parse_visibility(_ctx, _param, value: str | None) -> dict | None:
+    """``role:Developers`` -> ``{"type": "role", "value": "Developers"}``.
+
+    Jira accepts exactly these two restriction types on a comment. Anything
+    else is refused here rather than by the instance, whose error for an
+    unknown type does not name the option.
+    """
+    if value is None:
+        return None
+    kind, _, name = value.partition(":")
+    kind, name = kind.strip().lower(), name.strip()
+    if kind not in VISIBILITY_TYPES or not name:
+        raise click.BadParameter(f"got {value!r}; expected role:<project role> or group:<group>, e.g. role:Developers")
+    return {"type": kind, "value": name}
+
+
+def _visibility_label(visibility: dict | None) -> str:
+    """``"role Developers"`` for a restriction, ``""`` for none."""
+    return f"{visibility['type']} {visibility['value']}" if visibility else ""
+
+
+def _add_dry_run_record(issue_key: str, body: str, visibility: dict | None) -> dict:
+    record = {"issue_key": issue_key, "body": body}
+    if visibility:
+        record["visibility"] = visibility
+    return record
+
+
+def _print_dry_run(ctx, headline: str, intro: str, record: dict) -> None:
+    """Show what a real ``add`` or ``edit`` would send, and nothing else.
+
+    ``record["body"]`` is the text the escape and the lint returned, so the
+    preview is the text a real write would post. Printing the raw argument
+    instead would show something the instance never receives. ``--json``
+    gets the record itself, ``--quiet`` the body alone.
+    """
+    if ctx.obj["quiet"]:
+        print(record["body"])
+        return
+    if ctx.obj["json"]:
+        format_output({"dry_run": True, **record}, as_json=True)
+        return
+    warning(f"DRY RUN - {headline}")
+    print(f"\n{intro}")
+    print(record["body"])
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CLI Definition
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+# Backwards-compat alias for any external imports — implementation moved to lib.client.
+_fetch_comments_paginated = fetch_comments_paginated
+
+
+@click.group()
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+@click.option("--quiet", "-q", is_flag=True, help="Minimal output")
+@click.option("--env-file", type=click.Path(), help="Environment file path")
+@click.option("--profile", "-P", help="Jira profile name from ~/.jira/profiles.json")
+@click.option("--debug", is_flag=True, help="Show debug information on errors")
+@click.pass_context
+def cli(ctx, output_json: bool, quiet: bool, env_file: str | None, profile: str | None, debug: bool):
+    """Jira comment operations.
+
+    Add, edit, delete, and list comments on Jira issues.
+    Note: Comments should use Jira wiki markup syntax, not Markdown.
+    """
+    ctx.ensure_object(dict)
+    ctx.obj["json"] = output_json
+    ctx.obj["quiet"] = quiet
+    ctx.obj["debug"] = debug
+    ctx.obj["client"] = LazyJiraClient(env_file=env_file, profile=profile)
+    # Kept so the render pre-flight resolves the SAME instance the write goes
+    # to. Without them it falls back to ~/.env.jira, which under --profile is
+    # either absent (silently degraded forever) or a DIFFERENT Jira - and a
+    # clean preview from the wrong instance reads as a clean bill of health.
+    ctx.obj["env_file"] = env_file
+    ctx.obj["profile"] = profile
+
+
+@cli.command()
+@click.argument("issue_key")
+@click.argument("comment_text")
+@markup_options
+@click.option("--no-verify-mentions", is_flag=True, help="Skip [~username] mention verification")
+@click.option(
+    "--visibility",
+    metavar="TYPE:VALUE",
+    callback=_parse_visibility,
+    help="Restrict the comment to a project role or a group, e.g. role:Developers or group:jira-developers",
+)
+@click.option("--dry-run", is_flag=True, help=DRY_RUN_HELP)
+@click.pass_context
+def add(
+    ctx,
+    issue_key: str,
+    comment_text: str,
+    gates: MarkupGates,
+    no_verify_mentions: bool,
+    visibility: dict | None,
+    dry_run: bool,
+):
+    """Add a comment to an issue.
+
+    ISSUE_KEY: The Jira issue key (e.g., PROJ-123)
+
+    COMMENT_TEXT: Comment text (use Jira wiki markup, not Markdown).
+    Use "-" to read from stdin (e.g., cat file.txt | jira-comment add PROJ-123 -)
+
+    Note: Use Jira wiki syntax:
+      - *bold* not **bold**
+      - _italic_ not *italic*
+      - {code}...{code} blocks for multi-line code, {{monospace}} for inline
+      - [link text|url] for links, [^file.log] for attachments
+
+    Block tags ({code}, {noformat}, {quote}, {panel}) must stand alone on
+    their own line; literal mentions in prose must be escaped (\\{code\\}).
+
+    Dashes Jira would render as a strikethrough span (``{{mono}}-Word ... zu-``)
+    are escaped automatically before posting and reported on stderr; ``\\-``
+    prints as a plain hyphen. --no-auto-escape keeps the markup verbatim; a
+    deliberate strikethrough also needs --force, because the lint and the render
+    check each still refuse the span.
+    The comment is linted for this before posting (override with --force).
+
+    [~username] mentions are verified against Jira before posting, so no
+    separate user lookup is needed; an unknown username aborts with
+    suggestions (skip with --no-verify-mentions).
+
+    --visibility restricts who can read the comment: role:<project role>
+    (e.g. role:Developers) or group:<group>. You must be in that role or
+    group yourself, or Jira refuses the comment. Check that the people who
+    must read it are in it too; Jira does not warn when they are not.
+
+    --dry-run prints the comment exactly as it would be posted, after the
+    escape and the lint, and posts nothing. The render preview and the
+    mention lookup are skipped, because both call the instance.
+
+    Examples:
+
+      jira-comment add PROJ-123 "Fixed in commit abc123"
+
+      jira-comment add PROJ-123 "See {{config.py}} for details"
+
+      jira-comment add PROJ-123 "[~jane.doe] please review"
+
+      cat comment.txt | jira-comment add PROJ-123 -
+
+      cat comment.txt | jira-comment add PROJ-123 - --dry-run
+
+      jira-comment add PROJ-123 "Internal finding" --visibility role:Developers
+    """
+    ctx.obj["client"].with_context(issue_key=issue_key)
+    client = ctx.obj["client"]
+
+    comment_text = _read_comment_text(comment_text, "Usage: cat comment.txt | jira-comment add PROJ-123 -")
+
+    comment_text = guard_wiki_markup(
+        comment_text,
+        gates=gates.offline() if dry_run else gates,
+        issue_key=issue_key,
+        env_file=ctx.obj.get("env_file"),
+        profile=ctx.obj.get("profile"),
+        label="comment",
+    )
+    if dry_run:
+        label = _visibility_label(visibility)
+        _print_dry_run(
+            ctx,
+            "No comment will be added",
+            f"Would add to {issue_key}" + (f" (visible to {label})" if label else "") + ":",
+            _add_dry_run_record(issue_key, comment_text, visibility),
+        )
+        return
+    check_mentions_cli(client, comment_text, skip=no_verify_mentions)
+    me = warn_if_unclaimed(client, issue_key, ctx.obj)
+
+    try:
+        # Only pass visibility when set: without the option the call is exactly what it was.
+        extra = {"visibility": visibility} if visibility else {}
+        result = client.issue_add_comment(issue_key, comment_text, **extra)
+
+        if ctx.obj["quiet"]:
+            print(result.get("id", "ok"))
+        elif ctx.obj["json"]:
+            format_output(with_ticket_state(client, issue_key, result, ctx_obj=ctx.obj, me=me), as_json=True)
+        else:
+            success(f"Added comment to {issue_key}")
+            print(f"  Comment ID: {result.get('id', 'N/A')}")
+            if visibility:
+                print(f"  Visible to: {_visibility_label(visibility)}")
+            print_ticket_state(client, issue_key, ctx.obj, me=me)
+
+    except Exception as e:
+        if ctx.obj["debug"]:
+            raise
+        error(f"Failed to add comment to {issue_key}: {_sanitize_error(str(e))}")
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("issue_key")
+@click.argument("comment_id")
+@click.argument("comment_text")
+@markup_options
+@click.option("--no-verify-mentions", is_flag=True, help="Skip [~username] mention verification")
+@click.option("--dry-run", is_flag=True, help=DRY_RUN_HELP)
+@click.pass_context
+def edit(
+    ctx,
+    issue_key: str,
+    comment_id: str,
+    comment_text: str,
+    gates: MarkupGates,
+    no_verify_mentions: bool,
+    dry_run: bool,
+):
+    """Edit an existing comment on an issue.
+
+    ISSUE_KEY: The Jira issue key (e.g., PROJ-123)
+
+    COMMENT_ID: The ID of the comment to edit (use 'list' to find IDs)
+
+    COMMENT_TEXT: New comment text (use Jira wiki markup, not Markdown).
+    Use "-" to read from stdin (e.g., cat file.txt | jira-comment edit PROJ-123 12345 -).
+    Linted for wiki-markup problems before posting (override with --force).
+
+    Dashes Jira would render as a strikethrough span (``{{mono}}-Word ... zu-``)
+    are escaped automatically before posting and reported on stderr; ``\\-``
+    prints as a plain hyphen. --no-auto-escape keeps the markup verbatim; a
+    deliberate strikethrough also needs --force, because the lint and the render
+    check each still refuse the span.
+
+    --dry-run prints the new text exactly as it would be posted and changes
+    nothing; the render preview and the mention lookup are skipped.
+
+    Examples:
+
+      jira-comment edit PROJ-123 12345 "Updated: fixed in commit abc123"
+
+      jira-comment edit PROJ-123 12345 "h3. Findings\\n\\nUpdated analysis"
+
+      cat comment.txt | jira-comment edit PROJ-123 12345 -
+
+      cat comment.txt | jira-comment edit PROJ-123 12345 - --dry-run
+    """
+    ctx.obj["client"].with_context(issue_key=issue_key)
+    client = ctx.obj["client"]
+
+    comment_text = _read_comment_text(comment_text, "Usage: cat comment.txt | jira-comment edit PROJ-123 12345 -")
+
+    comment_text = guard_wiki_markup(
+        comment_text,
+        gates=gates.offline() if dry_run else gates,
+        issue_key=issue_key,
+        env_file=ctx.obj.get("env_file"),
+        profile=ctx.obj.get("profile"),
+        label="comment",
+    )
+    if dry_run:
+        _print_dry_run(
+            ctx,
+            "No comment will be changed",
+            f"Would replace comment {comment_id} on {issue_key} with:",
+            {"issue_key": issue_key, "comment_id": comment_id, "body": comment_text},
+        )
+        return
+    check_mentions_cli(client, comment_text, skip=no_verify_mentions)
+
+    try:
+        result = client.issue_edit_comment(issue_key, comment_id, comment_text)
+
+        if ctx.obj["quiet"]:
+            if isinstance(result, dict):
+                print(result.get("id", "ok"))
+            else:
+                print("ok")
+        elif ctx.obj["json"]:
+            format_output(with_ticket_state(ctx.obj["client"], issue_key, result, ctx_obj=ctx.obj), as_json=True)
+        else:
+            success(f"Updated comment {comment_id} on {issue_key}")
+            print_ticket_state(ctx.obj["client"], issue_key, ctx.obj)
+
+    except Exception as e:
+        if ctx.obj["debug"]:
+            raise
+        error(f"Failed to edit comment {comment_id} on {issue_key}: {_sanitize_error(str(e))}")
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("issue_key")
+@click.argument("comment_id")
+@click.option("--dry-run", is_flag=True, help="Show what would be deleted without making changes")
+@click.pass_context
+def delete(ctx, issue_key: str, comment_id: str, dry_run: bool):
+    """Delete a comment from an issue.
+
+    Non-interactive: there is no confirmation prompt, the comment is deleted
+    on the spot. Preview with --dry-run; no stdin is read.
+
+    ISSUE_KEY: The Jira issue key (e.g., PROJ-123)
+
+    COMMENT_ID: The ID of the comment to delete (use 'list' to find IDs)
+
+    Examples:
+
+      jira-comment delete PROJ-123 12345
+
+      jira-comment delete PROJ-123 12345 --dry-run
+    """
+    ctx.obj["client"].with_context(issue_key=issue_key)
+    client = ctx.obj["client"]
+
+    if dry_run:
+        warning("DRY RUN - No comment will be deleted")
+        print(f"\nWould delete comment {comment_id} from {issue_key}")
+        return
+
+    try:
+        url = f"rest/api/2/issue/{issue_key}/comment/{comment_id}"
+        client.delete(url)
+
+        if ctx.obj["quiet"]:
+            print("ok")
+        elif ctx.obj["json"]:
+            format_output({"issue_key": issue_key, "comment_id": comment_id, "deleted": True}, as_json=True)
+        else:
+            success(f"Deleted comment {comment_id} from {issue_key}")
+
+    except Exception as e:
+        if ctx.obj["debug"]:
+            raise
+        error(f"Failed to delete comment {comment_id} from {issue_key}: {_sanitize_error(str(e))}")
+        sys.exit(1)
+
+
+@cli.command("list")
+@click.argument("issue_key")
+@click.option(
+    "--limit",
+    "-n",
+    default=10,
+    show_default=True,
+    type=click.IntRange(min=0),
+    help="Max comments to show (0 = all)",
+)
+@click.option("--truncate", type=int, metavar="N", help="Truncate comment body to N characters")
+@click.pass_context
+def list_comments(ctx, issue_key: str, limit: int, truncate: int | None):
+    """List comments on an issue.
+
+    ISSUE_KEY: The Jira issue key (e.g., PROJ-123)
+
+    Examples:
+
+      jira-comment list PROJ-123
+
+      jira-comment list PROJ-123 --limit 5 --json
+    """
+    ctx.obj["client"].with_context(issue_key=issue_key)
+    client = ctx.obj["client"]
+
+    try:
+        show_all = limit == 0
+        if show_all:
+            comments, total = _fetch_comments_paginated(client, issue_key)
+        else:
+            issue = client.issue(issue_key, fields="comment")
+            comment_block = (issue.get("fields") or {}).get("comment") or {}
+            comments = comment_block.get("comments", []) or []
+            total = comment_block.get("total")
+
+        # Limit and reverse (newest first)
+        comments = list(reversed(comments))
+        shown = comments if show_all else comments[:limit]
+
+        # The truncation notice belongs on stderr, in every output mode. On
+        # stdout it is part of the payload: a caller that pipes the table
+        # through grep, or parses --json, drops the one line saying the history
+        # is incomplete and reads 10 of 163 comments as the whole record. That
+        # happened -- a ticket was reported as carrying no "ready for QA"
+        # comment when it did, because the read was cut and the cut was
+        # invisible. stderr survives the pipe; stdout does not.
+        truncated = total is not None and not show_all and len(shown) < total
+        if truncated:
+            warning(f"{issue_key}: showing {len(shown)} of {total} comments — use --limit 0 for the full history")
+
+        if ctx.obj["json"]:
+            format_output(shown, as_json=True)
+        elif ctx.obj["quiet"]:
+            for c in shown:
+                print(c.get("id", ""))
+        else:
+            if not shown:
+                print(f"No comments on {issue_key}")
+            else:
+                if truncated:
+                    print(f"Comments on {issue_key} ({len(shown)} of {total} shown — use --limit 0 to show all):\n")
+                else:
+                    print(f"Comments on {issue_key} ({len(shown)} shown):\n")
+                for c in shown:
+                    author = person_label(c.get("author"))
+                    created = c.get("created", "")[:16].replace("T", " ") if c.get("created") else "N/A"
+                    body = c.get("body", "")
+
+                    # Handle ADF format
+                    if isinstance(body, dict):
+                        body = extract_adf_text(body)
+
+                    # Truncate if requested
+                    if truncate and len(body) > truncate:
+                        body = body[: truncate - 3] + "..."
+
+                    print("-" * 80)
+                    print(f"[{created}] {author}:")
+                    print()
+                    for line in body.split("\n"):
+                        print(line)
+                    print()
+
+    except Exception as e:
+        if ctx.obj["debug"]:
+            raise
+        error(f"Failed to get comments for {issue_key}: {_sanitize_error(str(e))}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    cli()

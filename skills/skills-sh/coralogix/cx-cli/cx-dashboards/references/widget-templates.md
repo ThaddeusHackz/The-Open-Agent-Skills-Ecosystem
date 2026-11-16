@@ -1,0 +1,408 @@
+# Coralogix Dashboard JSON - Widget Templates
+
+Copy these templates when generating a dashboard. **Always replace every UUID** (`id.value`, query `id`) with a freshly generated UUID, and adapt queries to the target service.
+
+For query-language rules:
+
+- Dashboard-specific gotchas (`${__range}`, `promqlQueryType`, widget filters): [`query-syntax.md`](query-syntax.md).
+- Full DataPrime syntax: `cx-dataprime` skill → `skills/cx-dataprime/references/dataprime-reference.md`.
+- Full PromQL reference: `cx-metrics-query` skill → `skills/cx-metrics-query/references/promql-guidelines.md`.
+
+> For metrics, a "stat" widget in Coralogix docs is emitted as a typed `gauge` in the JSON; there is no typed stat widget. For logs, spans or DataPrime, a stat is a `dynamic` widget with a `stat` visualization (see *Widget: dynamic*).
+
+> Every query below must pass live verification via `cx metrics query` / `cx logs` / `cx spans` before deploy - see SKILL.md Phase 5.
+
+---
+
+## Top-level skeleton
+
+```json
+{
+  "id": "<21-char-nanoid>",
+  "name": "<Service> - <Purpose>",
+  "layout": {
+    "sections": [
+      { "id": {"value": "<uuid>"}, "rows": [ ... ], "options": { "custom": { "name": "Section name", "collapsed": false, "color": {"predefined": "SECTION_PREDEFINED_COLOR_UNSPECIFIED"} } } }
+    ]
+  },
+  "variables": [],
+  "variablesV2": [],
+  "filters": [ /* see "Top-level filters" below */ ],
+  "relativeTimeFrame": "172800s",
+  "annotations": [],
+  "off": {},
+  "actions": []
+}
+```
+
+A row always looks like:
+
+```json
+{
+  "id": {"value": "<uuid>"},
+  "appearance": {"height": 19},
+  "widgets": [ /* 1–2 widgets per row */ ]
+}
+```
+
+---
+
+## Widget: gauge (metrics "stat"/total)
+
+Use for headline numbers from a metrics query: counts, percentages, success rates.
+
+Gauge `min` and `max` must be numeric and `min < max`. This API constraint applies even when `thresholdType` is `THRESHOLD_TYPE_ABSOLUTE`; use a real range such as `0..100` for percentages, a known capacity/limit when available, or a max above the highest threshold.
+
+```json
+{
+  "id": {"value": "<uuid>"},
+  "title": "Success Rate",
+  "definition": {
+    "gauge": {
+      "query": {
+        "metrics": {
+          "promqlQuery": {
+            "value": "100 * sum(increase(foo_success_total[${__range}])) / clamp_min(sum(increase(foo_success_total[${__range}])) + sum(increase(foo_failure_total[${__range}])), 1)"
+          },
+          "aggregation": "AGGREGATION_UNSPECIFIED",
+          "filters": [],
+          "editorMode": "METRICS_QUERY_EDITOR_MODE_TEXT",
+          "promqlQueryType": "PROM_QL_QUERY_TYPE_INSTANT"
+        }
+      },
+      "min": 0,
+      "max": 100,
+      "showInnerArc": true,
+      "showOuterArc": true,
+      "unit": "UNIT_PERCENT",
+      "thresholds": [
+        {"from": 0,  "color": "var(--c-visualization-red-05)"},
+        {"from": 80, "color": "var(--c-visualization-yellow-05)"},
+        {"from": 95, "color": "var(--c-visualization-green-05)"}
+      ],
+      "dataModeType": "DATA_MODE_TYPE_HIGH_UNSPECIFIED",
+      "thresholdBy": "THRESHOLD_BY_UNSPECIFIED",
+      "decimal": 2,
+      "thresholdType": "THRESHOLD_TYPE_ABSOLUTE",
+      "legend": {"isVisible": true, "columns": [], "groupByQuery": true, "placement": "LEGEND_PLACEMENT_AUTO"},
+      "legendBy": "LEGEND_BY_GROUPS",
+      "displaySeriesName": false,
+      "decimalPrecision": false
+    }
+  }
+}
+```
+
+**For "count of bad things" (errors, DLQ):** use `unit: "UNIT_NUMBER"`, green at low values, red at high:
+
+```json
+"thresholds": [
+  {"from": 0,  "color": "var(--c-visualization-green-05)"},
+  {"from": 1,  "color": "var(--c-visualization-yellow-05)"},
+  {"from": 10, "color": "var(--c-visualization-red-05)"}
+],
+"thresholdType": "THRESHOLD_TYPE_ABSOLUTE"
+```
+
+**For a DataPrime-driven count (e.g. error log count):** don't put DataPrime in a typed `gauge`. Use a `dynamic` widget with a `stat` visualization ("One row, one number" under *Widget: dynamic*).
+
+---
+
+## Widget: pieChart
+
+Use for small-cardinality breakdowns (≤8 slices) from a metrics query.
+
+```json
+{
+  "id": {"value": "<uuid>"},
+  "title": "Messages Per Env",
+  "definition": {
+    "pieChart": {
+      "query": {
+        "metrics": {
+          "promqlQuery": {"value": "sum by (subsystem_name) (increase(foo_total[${__range}]))"},
+          "filters": [],
+          "groupNames": ["subsystem_name"],
+          "editorMode": "METRICS_QUERY_EDITOR_MODE_TEXT",
+          "promqlQueryType": "PROM_QL_QUERY_TYPE_INSTANT",
+          "aggregation": "AGGREGATION_UNSPECIFIED"
+        }
+      },
+      "maxSlicesPerChart": 8,
+      "minSlicePercentage": 1,
+      "stackDefinition": {"maxSlicesPerStack": 4},
+      "labelDefinition": {"labelSource": "LABEL_SOURCE_INNER", "isVisible": true, "showName": true, "showValue": true, "showPercentage": true},
+      "showLegend": true,
+      "unit": "UNIT_UNSPECIFIED",
+      "colorScheme": "classic",
+      "dataModeType": "DATA_MODE_TYPE_HIGH_UNSPECIFIED",
+      "decimal": 2,
+      "legend": {"isVisible": true, "columns": [], "groupByQuery": true, "placement": "LEGEND_PLACEMENT_AUTO"},
+      "hashColors": false,
+      "decimalPrecision": false,
+      "showTotal": false
+    }
+  }
+}
+```
+
+---
+
+## Widget: lineChart
+
+Use for anything over time from a metrics query (rates, latencies, counts per bucket).
+
+```json
+{
+  "id": {"value": "<uuid>"},
+  "title": "Latency P95 by Stage",
+  "definition": {
+    "lineChart": {
+      "legend": {"isVisible": true, "columns": [], "groupByQuery": true, "placement": "LEGEND_PLACEMENT_AUTO"},
+      "tooltip": {"showLabels": false, "type": "TOOLTIP_TYPE_ALL"},
+      "queryDefinitions": [
+        {
+          "id": "<uuid>",
+          "query": {
+            "metrics": {
+              "promqlQuery": {"value": "histogram_quantile(0.95, sum by (le, stage) (rate(foo_latency_bucket[${__range}])))"},
+              "filters": [],
+              "editorMode": "METRICS_QUERY_EDITOR_MODE_TEXT",
+              "seriesLimitType": "METRICS_SERIES_LIMIT_TYPE_BY_SERIES_COUNT"
+            }
+          },
+          "seriesCountLimit": "20",
+          "unit": "UNIT_SECONDS",
+          "scaleType": "SCALE_TYPE_LINEAR",
+          "isVisible": true,
+          "colorScheme": "classic",
+          "resolution": {"bucketsPresented": 96},
+          "dataModeType": "DATA_MODE_TYPE_HIGH_UNSPECIFIED",
+          "decimal": 2,
+          "hashColors": false,
+          "decimalPrecision": false,
+          "intervalResolution": {"auto": {"minimumInterval": "15s", "maximumDataPoints": 96}}
+        }
+      ],
+      "stackedLine": "STACKED_LINE_UNSPECIFIED",
+      "connectNulls": false
+    }
+  }
+}
+```
+
+- For counts (not latency) use `"unit": "UNIT_UNSPECIFIED"`.
+- Multiple lines in the same panel: add more objects to `queryDefinitions` (each with its own `id`).
+
+---
+
+## Widget: dynamic
+
+The widget for tables and for charts over a logs, spans or DataPrime query. A `dynamic` widget has one or more `queryDefinitions` and a `visualization` that says how to draw the result. Never emit the legacy `dataTable` widget.
+
+- **Set `visualization` to the chart the data calls for.** A `table` visualization is the neutral default and is right only for raw rows the user wants to read. Do not ship a wall of tables.
+- **A visualization maps the query's output columns.** Alias every projection and aggregation in the query (`aggregate count() as error_count`) and reference the alias in the visualization's fields.
+- **A `queryDefinitions[].id` is a plain string**, unlike widget and row ids, which are `{"value": ...}`.
+- **Set `dataModeType` to `DATA_MODE_TYPE_ARCHIVE`** on logs, spans and DataPrime queries (see "Tier (`dataModeType`) quick-reference" below). Metrics queries are not tiered.
+
+| Query returns | `visualization` |
+|---|---|
+| One row, one number | `stat`, or `gauge` when there is a known good/bad range |
+| One number per category, not a top-N list | `verticalBars` or `horizontalBars` (long labels); `pieChart` only when the values add up to a whole (counts, never latencies, percentiles or rates) |
+| One number per time bucket | `timeSeriesLinesMulti` (`timeSeriesBars` for counts per bucket) |
+| Series per time bucket per category | `timeSeriesLinesMulti` with `categoryFields` set |
+| Raw log or span rows; top-N lists (`topk`, `top`, any ranked listing) | `table` |
+
+A top-N result is one number per category, so it also fits the bar and pie rows. It is still a `table`: set `visualization: {"table": ...}` explicitly rather than leaving the choice open. A pie of a top-N is wrong (the slices are not parts of a whole), and for latencies or rates it is meaningless.
+
+**Raw rows** (e.g. last errors). Show the log text as `$d as body`, the whole user data. Don't pick one field such as `$d.message`: the field name differs per team, and a missing field renders as `null`:
+
+```json
+{
+  "id": {"value": "<uuid>"},
+  "title": "Last errors",
+  "definition": {
+    "dynamic": {
+      "queryDefinitions": [
+        {
+          "id": "<uuid>",
+          "query": {"dataprime": {"dataprimeQuery": {"text": "source logs | filter $m.severity == ERROR || $m.severity == CRITICAL | orderby $m.timestamp desc | choose $m.timestamp as timestamp, $m.severity as severity, $l.subsystemname as service, $d as body"}, "dataModeType": "DATA_MODE_TYPE_ARCHIVE"}}
+        }
+      ],
+      "visualization": {"table": {"columns": [{"field": {"keypath": ["timestamp"], "scope": "DATASET_SCOPE_USER_DATA"}}, {"field": {"keypath": ["severity"], "scope": "DATASET_SCOPE_USER_DATA"}}, {"field": {"keypath": ["service"], "scope": "DATASET_SCOPE_USER_DATA"}}, {"field": {"keypath": ["body"], "scope": "DATASET_SCOPE_USER_DATA"}}], "settings": {"rowStyle": "ROW_STYLE_ONE_LINE"}}}
+    }
+  }
+}
+```
+
+**Metrics-backed table** (e.g. top accounts by count). Every column of a PromQL result is `DATASET_SCOPE_USER_DATA`, labels included, and the value column is `value` (not the legacy `#value`). A column that does not match is silently dropped, and if none match the table ignores the stored order:
+
+```json
+{
+  "id": {"value": "<uuid>"},
+  "title": "Top Accounts by Message Count",
+  "definition": {
+    "dynamic": {
+      "queryDefinitions": [
+        {
+          "id": "<uuid>",
+          "query": {"metrics": {"promqlQuery": {"value": "sum by (account_id) (increase(foo_total[${__range}]))"}, "promqlQueryType": "PROM_QL_QUERY_TYPE_INSTANT", "editorMode": "METRICS_QUERY_EDITOR_MODE_TEXT"}}
+        }
+      ],
+      "visualization": {"table": {"columns": [{"field": {"keypath": ["account_id"], "scope": "DATASET_SCOPE_USER_DATA"}}, {"field": {"keypath": ["value"], "scope": "DATASET_SCOPE_USER_DATA"}}]}}
+    }
+  }
+}
+```
+
+**One number per time bucket** (error count over time). The field mapping sits in `queryDisplaySettings[]`, keyed by the query definition's `id` (`<query-uuid>`, the same value in both places). The single-query `timeSeriesLines` is deprecated:
+
+```json
+{
+  "id": {"value": "<uuid>"},
+  "title": "Errors over time",
+  "definition": {
+    "dynamic": {
+      "queryDefinitions": [
+        {
+          "id": "<query-uuid>",
+          "query": {"dataprime": {"dataprimeQuery": {"text": "source logs | filter $m.severity == ERROR | groupby roundTime($m.timestamp, 5m) as bucket aggregate count() as error_count"}, "dataModeType": "DATA_MODE_TYPE_ARCHIVE"}}
+        }
+      ],
+      "visualization": {"timeSeriesLinesMulti": {"queryDisplaySettings": [{"queryId": "<query-uuid>", "temporalField": {"keypath": ["bucket"], "scope": "DATASET_SCOPE_USER_DATA"}, "valueFields": [{"keypath": ["error_count"], "scope": "DATASET_SCOPE_USER_DATA"}]}]}}
+    }
+  }
+}
+```
+
+**One number per category** (errors by service):
+
+```json
+{
+  "id": {"value": "<uuid>"},
+  "title": "Errors by service",
+  "definition": {
+    "dynamic": {
+      "queryDefinitions": [
+        {
+          "id": "<uuid>",
+          "query": {"dataprime": {"dataprimeQuery": {"text": "source logs | filter $m.severity == ERROR | groupby $l.subsystemname as service aggregate count() as error_count"}, "dataModeType": "DATA_MODE_TYPE_ARCHIVE"}}
+        }
+      ],
+      "visualization": {"horizontalBars": {"categoryFields": [{"keypath": ["service"], "scope": "DATASET_SCOPE_USER_DATA"}], "valueField": {"keypath": ["error_count"], "scope": "DATASET_SCOPE_USER_DATA"}}}
+    }
+  }
+}
+```
+
+**One row, one number** (total errors):
+
+```json
+{
+  "id": {"value": "<uuid>"},
+  "title": "Total errors",
+  "definition": {
+    "dynamic": {
+      "queryDefinitions": [
+        {
+          "id": "<uuid>",
+          "query": {"dataprime": {"dataprimeQuery": {"text": "source logs | filter $m.severity == ERROR | aggregate count() as error_count"}, "dataModeType": "DATA_MODE_TYPE_ARCHIVE"}}
+        }
+      ],
+      "visualization": {"stat": {"valueFields": [{"keypath": ["error_count"], "scope": "DATASET_SCOPE_USER_DATA"}]}}
+    }
+  }
+}
+```
+
+---
+
+## Top-level filters
+
+Add one entry per slicing dimension the user approved. Users fill in `values` at view time.
+
+**Exclude non-prod environments** (replace the example values with whatever the target deployment actually uses, e.g. `["dev", "staging", "test"]`):
+
+```json
+{
+  "source": {
+    "metrics": {
+      "label": "subsystem_name",
+      "operator": {"notEquals": {"selection": {"list": {"values": ["<non-prod-env-1>", "<non-prod-env-2>"]}}}}
+    }
+  },
+  "enabled": true,
+  "collapsed": false,
+  "id": {"value": "<uuid>"}
+}
+```
+
+**User-fillable slicing filter**:
+
+```json
+{
+  "source": {
+    "metrics": {
+      "label": "account_id",
+      "operator": {"equals": {"selection": {"list": {"values": []}}}}
+    }
+  },
+  "enabled": true,
+  "collapsed": false,
+  "id": {"value": "<uuid>"}
+}
+```
+
+---
+
+## Section template
+
+```json
+{
+  "id": {"value": "<uuid>"},
+  "rows": [ /* rows go here */ ],
+  "options": {
+    "custom": {
+      "name": "Errors",
+      "collapsed": true,
+      "color": {"predefined": "SECTION_PREDEFINED_COLOR_UNSPECIFIED"}
+    }
+  }
+}
+```
+
+Set `collapsed: true` for logs/debug sections and any section that isn't the dashboard's primary purpose.
+
+---
+
+## Tier (`dataModeType`) quick-reference
+
+`dataModeType` lives **per widget** under the widget's definition (e.g. `definition.gauge.dataModeType`, `definition.dynamic.queryDefinitions[].query.<logs|spans|dataprime>.dataModeType`, `definition.lineChart.queryDefinitions[].dataModeType`). It controls which storage tier the widget reads from at render time.
+
+| Value | When |
+|---|---|
+| `DATA_MODE_TYPE_ARCHIVE` | **default** for every logs, spans and DataPrime widget — Archive ("Monitoring" in the UI) holds all ingested logs and spans |
+| `DATA_MODE_TYPE_HIGH_UNSPECIFIED` | Frequent Search — only when the user asks for it, or when the account has no archive (`cx archive logs get` shows `isActive: false`). It holds only data that TCO routes to the high-priority tier, so other data renders empty |
+
+Logs, spans and DataPrime widgets ship with `DATA_MODE_TYPE_ARCHIVE`. On an account with no archive, change them all to `DATA_MODE_TYPE_HIGH_UNSPECIFIED`. Set it on **every** such widget, not just the dashboard root. The metrics templates above keep `DATA_MODE_TYPE_HIGH_UNSPECIFIED`, because metrics are not tiered.
+
+---
+
+## Unit enum quick-reference
+
+| Value | When |
+|---|---|
+| `UNIT_UNSPECIFIED` | raw counts, unitless ratios |
+| `UNIT_NUMBER` | explicit integer count |
+| `UNIT_SECONDS` | durations/latency |
+| `UNIT_PERCENT` | percentages 0–100 |
+| `UNIT_BYTES` | sizes |
+
+---
+
+## Threshold type
+
+- `THRESHOLD_TYPE_ABSOLUTE` - thresholds compared against the raw value. Use for success rates and fixed-meaning counts.
+- `THRESHOLD_TYPE_RELATIVE` - thresholds as % of min/max. Use when the scale is arbitrary.
+
+Default to `ABSOLUTE` for rates and DLQ counts; `RELATIVE` only when the absolute scale is unknown.

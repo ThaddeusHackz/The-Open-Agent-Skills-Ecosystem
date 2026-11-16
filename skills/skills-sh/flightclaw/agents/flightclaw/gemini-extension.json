@@ -1,0 +1,11 @@
+{
+  "name": "flightclaw",
+  "version": "1.0.0",
+  "description": "Search Google Flights, price-track routes and get alerts when fares drop, then book and pay through Duffel. Remembers travellers, companions, loyalty programmes, cards and cabin preferences so options come back ranked for the person asking.",
+  "contextFileName": "SKILL.md",
+  "mcpServers": {
+    "flightclaw": {
+      "httpUrl": "https://mcp.flightclaw.com/mcp"
+    }
+  }
+}

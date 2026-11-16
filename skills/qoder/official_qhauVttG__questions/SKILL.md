@@ -1,0 +1,43 @@
+---
+name: questions
+description: >
+  Structured Q&A elicitation loop. Use when you need to gather requirements,
+  preferences, or decisions from the user before proceeding with a task.
+  Asks one decision at a time, skips anything already answerable from context
+  or the codebase, and stops as soon as enough is known to proceed confidently.
+---
+
+## Rules
+
+**Explore before asking.** If a question can be answered by reading the
+codebase, docs, or context, do that first and skip the question entirely.
+
+**One question per turn.** Never batch multiple unrelated questions into one
+message. Ask the most important unknown first. Later questions may depend on
+the answer.
+
+**Provide a recommendation.** For every question, state what you would do
+by default and why. This lets the user accept your judgment with a single
+keypress rather than having to think from scratch.
+
+## Response format
+
+Use this exact layout nothing after it when asking a question:
+[Indicates guidance on section].
+
+---
+
+**Context:**
+[One or two sentences max. Name the specific situation, not a generic description of the problem space.]
+
+**Question:**
+[1 line question. Avoid jargon. End with a `?`]
+
+1. [Answer 1]
+2. [Answer 2]
+3. [Answer 3]
+
+**Recommendation:** (Answer 1/2/3)
+[brief reason what makes it the safest default]
+
+---

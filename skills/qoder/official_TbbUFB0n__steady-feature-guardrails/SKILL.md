@@ -1,0 +1,161 @@
+---
+name: steady-feature-guardrails
+description: Use when implementing Steady product features or UX changes to preserve the post-refactor architecture. Routes work to the right supporting skills and enforces repo-specific guardrails around giant screens, shared modules, routers, imports, and tests.
+---
+
+# Steady Feature Guardrails
+
+Use this skill for product work in Steady before you start coding.
+
+Its job is simple:
+
+1. classify the feature
+2. load the right supporting skills
+3. keep the change out of the architectural debt traps we already know about
+
+Read [references/hotspots.md](references/hotspots.md) before touching any hotspot file.
+If your change materially changes hotspot files or preferred landing zones, update that reference in the same change.
+Read [references/parked-feature-gates.md](references/parked-feature-gates.md) before touching recovery gates, Coach, Steady AI, screenshot demo mode, Home nudges, Settings entries, or tab navigation.
+
+## Load these companion skills
+
+Always load:
+
+- `engineering`
+- `product`
+- `tests`
+
+Then load the area-specific skills:
+
+- screen or navigation work: `screens`
+- onboarding or plan-builder work: `plan-builder`
+- cross-screen state, orchestration, or shared logic: `interface-design`, `deep-modules`
+- Steady AI or conversational UX: `ai-coach`
+- deliberate cleanup or debt paydown: `improve-codebase-architecture`
+
+## Guardrails
+
+### 1. Do not patch the same behavior into multiple screens
+
+If the feature touches two or more of these:
+
+- `Home`
+- `Week`
+- `Block`
+- `Settings`
+- `sync-run`
+
+then do not copy logic into each screen. Create or extend a shared module first, then wire the screens to it.
+
+### 2. Keep giant screens shallow
+
+Hotspot screens are allowed to compose data and UI, but they should not absorb new non-trivial business rules.
+
+If the change is larger than a small presentation tweak:
+
+- move logic into a shared helper, hook, controller, or feature module
+- keep the screen as the composition layer
+
+### 3. Keep routers thin
+
+In `packages/server/src/trpc/*`:
+
+- validate input
+- enforce auth
+- delegate to a service or workflow module
+- use concrete Zod schemas for app payloads; do not use `z.any()` for plan, session, template-week, or mutation inputs
+
+Do not add multi-step orchestration directly into routers unless the change is truly tiny.
+
+For plan router inputs, template-week sessions may omit generated `id`/`date` fields because onboarding submits template days before materialisation. Persisted weeks, propagated sessions, and block reschedule target sessions must use the full planned-session schema with `id` and `date`.
+
+### 4. Keep plan mutations server-owned
+
+Live app screens should submit user intent through `packages/app/lib/plan-api.ts`, not authoritative whole-plan replacements.
+
+For plan mutations:
+
+- send narrow intent such as session edit scope, reschedule swap log, or skipped-session command
+- load and validate the active plan in `packages/server/src/services/plan-workflow-service.ts`
+- preserve completed or matched sessions at the server workflow boundary
+- keep `updateWeeks` / `updatePlanWeeks` as a transitional whole-plan bridge, not a preferred screen API
+
+### 5. Respect package boundaries
+
+The app must not import sibling package internals such as:
+
+- `@steady/server/src/**`
+
+Use package exports only. If the export you need does not exist, add the export instead of reaching into `src`.
+
+### 6. Keep environment-sensitive setup out of screens
+
+Anything that depends on environment detection, native modules, Supabase setup, or platform-specific loading belongs in:
+
+- `packages/app/lib/*`
+- dedicated setup utilities
+- test harness files
+
+Do not push that logic down into screen or component files.
+
+### 7. Prefer behavioural tests
+
+For changed features, test the user-visible flow or public module boundary.
+
+Do not rely only on implementation-coupled tests.
+
+When a change crosses screens or layers, add or update the shared boundary test that proves the behavior still works.
+
+### 8. Do not leave legacy copies behind after extraction
+
+If you extract shared logic into `packages/app/features/*`, `packages/app/lib/*`, or `packages/server/src/services/*`:
+
+- remove or migrate the old helper/module in the same change
+- move tests to the surviving boundary
+- do not keep overlapping old and new copies unless there is a clear temporary migration reason
+
+Canonical shared helper locations:
+
+- pace parsing/normalisation and `secondsToPace`: `packages/types/src/lib/intensity-targets.ts`
+- app pace/distance/duration display: `packages/app/lib/units.ts`
+- app date and month labels: `packages/app/lib/date-labels.ts`
+- app Expo route-param coercion: `packages/app/lib/route-params.ts`
+
+### 9. If you knowingly add debt, say so before finishing
+
+If speed forces a shortcut:
+
+- call it out explicitly
+- explain why it was taken
+- create a follow-up Linear issue before you finish
+
+### 10. Keep the guardrail map current
+
+If a refactor changes hotspot size, risk, or landing zones:
+
+- update `references/hotspots.md`
+- remove stale line counts
+- remove dead file references
+- keep the map aligned with the codebase you just changed
+
+### 11. Keep parked features explicitly gated
+
+Steady AI, human coach surfaces, and normal-mode recovery UI must stay hidden unless the user explicitly asks to re-enable them.
+
+- use `packages/app/features/parked-feature-gates.ts` for app-side visibility decisions
+- do not expose the Coach tab, Steady AI Settings rows, Home AI nudges, AI CTAs, or chat inputs by relying on a single shared constant flip
+- keep screenshot demo fixtures behind explicit screenshot demo mode
+- add rendered tests at the Home, Settings, tab, or routed-screen boundary when parked visibility changes
+
+## Quick decision check
+
+Before coding, answer these:
+
+1. Is this a single-screen presentation change, or shared behavior?
+2. If shared behavior, where is the narrowest shared module boundary?
+3. Am I adding logic to a hotspot file that should live somewhere else?
+4. Am I crossing a package boundary the wrong way?
+5. If I extracted shared logic, did I remove the old copy and move tests to the surviving boundary?
+6. What behavioural test will prove this change is safe?
+
+If those answers are fuzzy, stop and design the boundary first.

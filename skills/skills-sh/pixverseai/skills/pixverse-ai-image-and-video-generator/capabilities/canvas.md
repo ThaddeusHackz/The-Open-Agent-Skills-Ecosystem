@@ -1,0 +1,377 @@
+---
+name: pixverse:canvas
+description: Build and manage connected Canvas generation workflows from the CLI. Create projects, arrange layouts, inspect graphs, query node schemas, dry-run and apply patches, dispatch generation, rebind confirmation plans, recover nodes, manage versions, rerun, and extract audio. Query live capabilities instead of assuming node types or model mappings.
+---
+
+# Canvas
+
+Canvas is a graph of connected generation nodes. A project holds prompts, reference media, generation tasks, and composed outputs. Dependencies decide when a node can run.
+
+The CLI reuses the existing login, `--json` / `-p` stdout contract, and standard exit codes. Canvas has no separate auth path or API base.
+
+**Do not** hard-code Canvas node types, adapter routes, or CLI field mappings. Query them:
+
+```bash
+pixverse capabilities canvas --json
+pixverse capabilities canvas --node-type <type> --json
+pixverse canvas node schema --node-type <type> --json
+```
+
+See [capabilities](capabilities.md). `capability_ref` does not authorize calling `create.*` instead of Canvas Graph.
+
+Requires authentication and CLI 1.4.0+.
+
+## Terms
+
+| Term | Meaning |
+|:---|:---|
+| Canvas project | One workspace of nodes and connections |
+| Node | One input, generated asset, text artifact, or composition step |
+| Dependency | A connection that requires one node before another can run |
+| Patch | A validated set of node and dependency changes |
+| Dispatch | Starting generation for specific ready nodes |
+| Dispatch plan | A confirmation record authorizing one exact node batch |
+| Version | One saved generation result for a node |
+| `edit_version` | Optimistic lock for writes; read it from the latest graph or successful apply |
+
+Keep `project_id`, `node_id`, `history_id`, `session_id`, `run_id`, and plan IDs as **strings**. Never coerce them to JavaScript numbers.
+
+## Project IDs
+
+Pass the project ID after the **complete command path**, or use the compatible `--project-id <id>` flag. One resolved ID is required; there is no default project. This covers all 15 project-scoped operations:
+
+- `arrange`
+- `graph get`, `graph status`, `graph invalid-nodes`, `graph reconcile`
+- `node get`, `node rerun`, `node versions`, `node version`, `node version apply`, `node extract-audio`
+- `patch dry-run`, `patch apply`, `dispatch`, `dispatch rebind`
+
+`project create` and `node schema` take no project ID. Node/history identifiers remain named flags.
+
+```bash
+pixverse canvas graph get "$PROJECT_ID" --json
+pixverse canvas graph get --project-id "$PROJECT_ID" --json
+pixverse canvas node version apply "$PROJECT_ID" --node-id video_01 --history-id "$HISTORY_ID" --json
+```
+
+Both forms are trimmed and preserved as strings. If both are supplied, they must match exactly after trimming. Missing, empty, or conflicting values fail locally with exit 6 before Graph/capability requests or writes. Graph commands retain opaque non-empty project IDs; **arrange** requires a positive decimal string matching `[1-9][0-9]*` (no leading zero, sign, fraction, or exponent), without numeric conversion even for very large IDs.
+
+## Agent workflow
+
+```text
+Create project → query capabilities → graph get → patch dry-run → patch apply → dispatch exact executable nodes → graph status
+```
+
+```bash
+# 1. Empty project; keep project_id
+if CREATED=$(pixverse canvas project create --name "Campaign workspace" --json); then
+  PROJECT_ID=$(printf '%s\n' "$CREATED" | jq -er '.project_id') || exit 1
+else
+  exit $?
+fi
+
+# 2. Confirm the node/route/model before writing a patch
+pixverse capabilities canvas \
+  --node-type image_generate \
+  --selector text_to_image \
+  --model qwen-image \
+  --json
+
+# 3. Read the graph; keep edit_version
+pixverse canvas graph get "$PROJECT_ID" --json
+
+# 4. Validate, then apply the same patch input
+pixverse canvas patch dry-run "$PROJECT_ID" --patch patch.json --json
+pixverse canvas patch apply "$PROJECT_ID" --patch patch.json --json
+
+# 5. Dispatch only diff.executable_node_ids from apply
+pixverse canvas dispatch \
+  "$PROJECT_ID" \
+  --node-ids image_01,video_01 \
+  --edit-version 13 \
+  --json
+
+# 6. Poll only the involved nodes
+pixverse canvas graph status \
+  "$PROJECT_ID" \
+  --node-ids image_01,video_01 \
+  --json
+```
+
+## canvas project create
+
+Creates an empty project in the active workspace. Name and description are optional; the CLI does not invent field limits.
+
+```bash
+pixverse canvas project create --json
+pixverse canvas project create --name "Campaign workspace" --description "Connected workflow" --json
+```
+
+Success JSON includes a non-empty `project_id` plus `trace_id`. Creation does not lock the editor or fetch the graph. There is no caller idempotency key and no CLI command to list projects. If creation times out, do not blindly retry: a project may already exist. Ask the user, who can check Canvas on the web, before creating another.
+
+## canvas arrange <id>
+
+Automatically arrange and **save all nodes** in an existing project. This is an authenticated layout mutation, not generation; team access requires Member or higher, enforced by the server.
+
+```bash
+pixverse canvas arrange "$PROJECT_ID" --json
+# Read the saved positions and current edit_version before another change:
+pixverse canvas graph get "$PROJECT_ID" --json
+```
+
+`canvas arrange --project-id "$PROJECT_ID" --json` is equivalent. The request contains only the positive-decimal-string `project_id`. There are no selection/group IDs, layout modes, `--edit-version`, or idempotency key. Arrange does not acquire an editor lock, query capabilities/Graph, patch, dispatch, or poll generation.
+
+JSON returns the backend response plus `trace_id` when available. An empty object is successful (for example `{ "trace_id": "..." }`); missing/null response data is an error. Do not expect `applied`, node positions, or an edit version in this result. Read `graph get` to inspect the updated layout. If arrange times out (exit 2), read the Graph before considering a retry: the layout may already have been saved.
+
+## Graph reads
+
+### canvas graph get
+
+```bash
+pixverse canvas graph get "$PROJECT_ID" --json
+```
+
+Returns the full snapshot. Preserve at least `project_id`, `edit_version`, `nodes`, and `edges`. Use `edit_version` on later writes.
+
+Each node's `node_type` comes from its node metadata; commands that need an exact type fail when that metadata is missing. Agent-created nodes are marked in node metadata (for example `source: "agent"`); `source_type` (`asset` / `generate` / `group`) is not an ownership marker.
+
+### canvas graph status
+
+```bash
+pixverse canvas graph status "$PROJECT_ID" --json
+pixverse canvas graph status "$PROJECT_ID" --node-ids image_01,video_01 --json
+```
+
+`--node-ids` is optional and comma-separated with no duplicates. The CLI filters `nodes` client-side and still preserves `project_id`, `edit_version`, `summary`, and `invalid`.
+
+`derived_state` values: `METADATA`, `READY`, `PENDING`, `RUNNING`, `SUCCEEDED`, `FAILED`, `BLOCKED`, `INVALID`.
+
+Polling:
+
+- 2 seconds for the first 30 seconds, then exponential backoff up to 10 seconds
+- Terminal: `SUCCEEDED`, `FAILED`, `INVALID`
+- `BLOCKED`: inspect dependencies; do not rerun the blocked node
+- `FAILED` with `retryable === true`: offer `canvas node rerun`
+
+### canvas graph invalid-nodes
+
+```bash
+pixverse canvas graph invalid-nodes "$PROJECT_ID" --json
+```
+
+Surface `invalid`, `error_code`, and `error_message`, not only node IDs.
+
+### canvas graph reconcile
+
+Recovery for node state that is stuck or out of sync. **Not** a normal post-dispatch step and never a substitute for Patch → Dispatch.
+
+```bash
+pixverse canvas graph reconcile \
+  "$PROJECT_ID" \
+  --node-ids image_01,video_01 \
+  --edit-version 13 \
+  --json
+```
+
+Requires explicit `--node-ids` and current `--edit-version`. Optional `--session-id`, `--run-id`, `--dispatch-plan-id`, `--require-dispatch`. Exit policy matches dispatch after stripping the `reconciled_` prefix from `dispatch_status`.
+
+## Node inspection and lifecycle
+
+### canvas node get / schema
+
+```bash
+pixverse canvas node get "$PROJECT_ID" --node-id image_01 --json
+pixverse canvas node schema --node-type image_generate --json
+```
+
+`node schema` is the live structure for one type. Do not snapshot it into this skill.
+
+### canvas node versions / version / version apply
+
+```bash
+pixverse canvas node versions "$PROJECT_ID" --node-id video_01 --page 1 --page-size 20 --json
+pixverse canvas node version "$PROJECT_ID" --node-id video_01 --history-id "$HISTORY_ID" --json
+pixverse canvas node version apply "$PROJECT_ID" --node-id video_01 --history-id "$HISTORY_ID" --json
+```
+
+`--page` defaults to 1; `--page-size` is 1–100 (default 20). Apply accepts optional `--session-id` / `--run-id` and does **not** take `--edit-version`. `applied=false` means the version is already current — a successful no-op. A successful switch advances the graph version but does not return it; read the graph again before another write. Downstream nodes are not invalidated or redispatched automatically.
+
+### canvas node rerun
+
+```bash
+pixverse canvas node rerun \
+  "$PROJECT_ID" \
+  --node-id video_01 \
+  --edit-version 13 \
+  --json
+```
+
+`--edit-version` is required. Optional `--session-id` / `--run-id`. Reuses the node's current parameters. Do not simulate rerun by creating a new node with the same ID. Success statuses: `rerun_dispatched`, `skipped`. `failed` exits non-zero even when the request itself succeeded.
+
+### canvas node extract-audio
+
+Extracts the **complete** audio track from a trusted source video node into a Canvas audio node. The CLI may create the target if it is missing.
+
+```bash
+pixverse canvas node extract-audio \
+  "$PROJECT_ID" \
+  --node-id audio_extract_01 \
+  --source-node-id video_01 \
+  --json
+```
+
+Rules:
+
+- `--node-id` is the empty target; `--source-node-id` is the source video
+- The two IDs must differ
+- Source must have `content_type=video` and a trusted `file_path` from the current graph — never pass a raw media path
+- An existing target must be an agent-created `audio_reference` with `action_type=upload`, `content_type=audio`, `status=normal`, and empty `task_id` / `history_id` / `file_path`
+- Poll the target with `canvas graph status`; there is no separate Canvas task-lookup command
+
+## Patches
+
+`--patch` is the `graph_patch` object only (literal JSON, file path, or `-` for stdin). The CLI wraps it with `idempotency_key` and optional session/run IDs.
+
+```json
+{
+  "schema_version": "canvas_agent_graph.v1",
+  "base_edit_version": 12,
+  "nodes": [
+    {
+      "node_id": "script_01",
+      "node_type": "script",
+      "title": "Opening scene",
+      "artifact": { "text": "A wide establishing shot at sunrise." }
+    }
+  ]
+}
+```
+
+Identify the project with positional `<id>` or `--project-id`. Omitting `project_id` inside the patch is preferred; a matching value is accepted, a mismatch is rejected locally.
+
+```bash
+pixverse canvas patch dry-run "$PROJECT_ID" --patch patch.json --json
+pixverse canvas patch apply "$PROJECT_ID" --patch patch.json --json
+printf '%s' '{"schema_version":"canvas_agent_graph.v1","base_edit_version":12,"nodes":[]}' | \
+  pixverse canvas patch dry-run "$PROJECT_ID" --patch - --json
+```
+
+| Flag | Meaning |
+|:---|:---|
+| `<id>` or `--project-id <id>` | One resolved project ID required |
+| `--patch <input>` | Required graph_patch JSON (literal, file, or `-`) |
+| `--idempotency-key <key>` | Optional; derived automatically from `project_id` + canonical `graph_patch` |
+| `--session-id <id>` / `--run-id <id>` | Optional positive decimal strings |
+
+For the same project and unchanged patch, dry-run and apply reuse the same derived key. Supply `--idempotency-key` only when the workflow must own the retry key. When revising a patch after a graph change, rebuild it against the intended state and use a **new** key. Do not reuse an old key with only `base_edit_version` replaced; the backend rejects it.
+
+Dry-run and apply forward the supplied `base_edit_version` unchanged, even when it differs from the latest Graph version; do not rewrite it just to match. The CLI still reads Graph/capability context and validates schema, nodes, selectors, models and inputs; backend concurrency checks can still reject the request. Read the latest Graph when preparing a new patch, and inspect any backend conflict before retrying.
+
+### Local validation (exit 6 before HTTP)
+
+- `schema_version` is exactly `canvas_agent_graph.v1`
+- `base_edit_version` is a non-negative integer
+- `nodes` and `deleted_node_ids` are not both empty
+- node IDs unique; no ID in both `nodes` and `deleted_node_ids`
+- `script` / `shot_plan` text lives in `artifact.text`
+- image/video reference nodes provide a non-empty `file_path`
+- `audio_reference` normally has `file_path`, except an empty extraction target that depends on the source video
+- payload node references also appear in `depends_on`, except `video_compose`
+- mapped nodes are prechecked against the live v2 adapter + current CLI Create registry
+
+Backend still owns DAG validation, deleted-node ownership, and concurrent graph state. Unknown selector, unavailable model, missing route condition, unknown CLI parameter, or illegal value is rejected locally with exit 6. Local precheck does **not** write CLI defaults back into the user's patch.
+
+Canvas accepts JSON booleans or numeric `0`/`1` for Canvas `audio` and `multi_shot`, preserving the supplied value and omitted-field behavior. Strings such as `"true"` or `"1"` are not numeric/boolean switches. Mode/model validation remains in force; this exception does not apply to every boolean field.
+
+### Updates and dependencies
+
+Updates are not JSON Merge Patch and not full-node replacement:
+
+- omitted `title` / `position` / `style` are preserved
+- `content_type` cannot change
+- `payload` and agent metadata are replaced wholesale — submit complete objects
+- existing dependencies **cannot** be cleared or replaced in place; omitted and empty `depends_on` do not remove edges
+
+To change dependencies on an agent-created node:
+
+1. Delete it in one patch
+2. Read the latest graph and `edit_version` (do not guess the version)
+3. Create a replacement with a **new** project-unique `node_id` and the complete `depends_on` in a second patch
+4. Retarget every downstream dependency and payload reference, then read the graph again
+
+Never put delete + recreate in one patch. Soft-deleted IDs stay reserved; reusing one is rejected as a conflict. Nodes not created by the agent workflow cannot use this workaround.
+
+`video_compose` references completed source media **only** through `payload.tracks`. Omit `depends_on` entirely so the composition node stays edge-free.
+
+### Success checks
+
+- Dry-run succeeds only when the request succeeds and `valid === true`
+- Apply succeeds only when `valid === true` and `applied === true`
+- Preserve the apply `diff`, especially `executable_node_ids`, `metadata_node_ids`, and the new `edit_version`
+
+## Dispatch
+
+Dispatch only after a successful apply, and only the intended subset of `diff.executable_node_ids`. Do not dispatch metadata nodes.
+
+```bash
+pixverse canvas dispatch \
+  "$PROJECT_ID" \
+  --node-ids image_01,video_01 \
+  --edit-version 13 \
+  --json
+```
+
+| Flag | Meaning |
+|:---|:---|
+| `<id>` or `--project-id <id>` | One resolved project ID required |
+| `--node-ids <a,b,c>` | Required exact batch |
+| `--edit-version <n>` | Required; from successful apply or latest graph |
+| `--dispatch-plan-id <id>` | Required for nodes awaiting confirmation |
+| `--session-id` / `--run-id` | Optional positive decimal strings |
+| `--require-dispatch` | Also fail on `skipped` / `no_ready_nodes` |
+
+`dispatch_status` values: `no_ready_nodes`, `partial`, `failed`, `queued`, `dispatched`, `skipped`.
+
+Exit codes:
+
+- `dispatched`, `queued`, `skipped`, `no_ready_nodes` → 0
+- `partial`, `failed` → non-zero (1)
+- `--require-dispatch` also makes `skipped` and `no_ready_nodes` non-zero
+
+`partial` is not whole-request success — inspect dispatched, deferred, skipped IDs, and errors. A repeat dispatch returning `skipped` means already processed; do not recreate nodes.
+
+For nodes whose `semantic.dispatch_state` is `awaiting_confirmation`, use the matching `semantic.dispatch_plan_id`. Never strip semantic metadata to bypass consent.
+
+### canvas dispatch rebind
+
+Binds existing agent-created **READY** nodes to a caller-created opaque plan ID. It does not create nodes or start generation. All-or-nothing: succeeds only when `rebound === true`. Do **not** pass `--edit-version`.
+
+```bash
+pixverse canvas dispatch rebind \
+  "$PROJECT_ID" \
+  --dispatch-plan-id plan-20260817-001 \
+  --node-ids image_01,video_01 \
+  --json
+
+pixverse canvas dispatch \
+  "$PROJECT_ID" \
+  --dispatch-plan-id plan-20260817-001 \
+  --node-ids image_01,video_01 \
+  --edit-version "$REBIND_EDIT_VERSION" \
+  --json
+```
+
+After rebind, dispatch with the response `edit_version`, the **same** `node_ids`, and the same plan ID. A plan ID authorizes one exact batch and must not be reused for a different batch.
+
+## Errors and recovery
+
+Exit codes follow the [execution contract](../references/execution-contract.md#waiting-and-recovery), with these Canvas specifics:
+
+- Exit 1 also covers an invalid or unapplied patch and dispatch `partial` / `failed`. Dispatch `skipped` / `no_ready_nodes` exit 0 unless `--require-dispatch` is set.
+- Exit 2 (timeout): if `patch apply` is unknown, retry the **same** patch with the **same** idempotency key. If `arrange` or `project create` timed out, read the graph or ask the user before retrying.
+- Exit 6: missing or conflicting project IDs, a malformed arrange ID, bad JSON, an illegal patch, or an unsupported model/selector. Nothing was written.
+- Backend errors keep their `code`, `error` and `trace_id`. For node-not-found, version or concurrency conflicts, read the graph again; for a conflict on a patch, rebuild it against the latest graph with a new idempotency key. For access errors, check the project's workspace and the authenticated account.
+
+## Related
+
+- [capabilities](capabilities.md): offline Create registry and live Canvas capability queries
+- [create-video](create-video.md) / [create-and-edit-image](create-and-edit-image.md): direct Create commands; Canvas generation still goes through `canvas dispatch`

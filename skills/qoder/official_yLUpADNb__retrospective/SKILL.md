@@ -1,0 +1,398 @@
+---
+name: retrospective
+description: "Run a sprint retrospective for this project. Use when the user says 'retrospective', 'retro', 'close out the sprint', 'what went well', 'generate retro', or wants to generate a RETRO-NN.md file. Reads UPSTREAM-*.md files, recent git history, and conversation context to pre-populate the retrospective. Do NOT use for read-only sprint summaries — use the sprint-review agent for that."
+user-invocable: true
+paths:
+  - "RETRO-*.md"
+  - "UPSTREAM-*.md"
+  - "SYNERGY-*.md"
+allowed-tools:
+  - Read
+  - Edit
+  - Write
+  - Glob
+  - Grep
+  - Bash
+  - Skill
+  - mcp__basic-memory__search_notes
+  - mcp__basic-memory__read_note
+  - mcp__basic-memory__write_note
+  - mcp__basic-memory__edit_note
+  - mcp__basic-memory__schema_validate
+  - mcp__basic-memory__schema_diff
+  - mcp__basic-memory__schema_infer
+---
+
+# Sprint Retrospective
+
+Generate a sprint retrospective for this project. If the project `CLAUDE.md` has
+a Sprint retrospectives section with a template, use it; otherwise use the
+template below.
+
+## Context
+
+Retrospective files are named `RETRO-NN.md` in the project root. Each covers one
+sprint's worth of work.
+
+## Workflow
+
+### 1. Determine sprint number
+
+```bash
+ls RETRO-*.md | sort -V | tail -1
+```
+
+Extract the highest sprint number and increment by 1.
+
+**This file count is canonical for the trend-review heuristic in step 4** —
+do not substitute a user-asserted topic number, release number, or `bd`
+sprint label. If `RETRO-NN.md` count is divisible by 4, this IS a
+trend-review sprint regardless of how the work is verbally framed.
+
+### 2. Gather context
+
+Run these in parallel:
+
+**Recent commits since last retro:**
+
+```bash
+# Anchor to the commit that created/last modified the previous RETRO file.
+# Edge cases that both result in full-history range (correct for Sprint 1):
+#   1. No prior RETRO-*.md files exist yet
+#   2. RETRO files are gitignored — git log -- RETRO-*.md returns empty
+# In both cases the inner git log returns empty, making the range "..HEAD"
+# which shows all commits — the right behavior for a first retrospective.
+git log --oneline "$(git log -1 --format=%H -- RETRO-*.md)"..HEAD --no-merges
+```
+
+**Current upstream status:**
+
+- Glob for all `UPSTREAM-*.md` files and read them
+- Count open items per file and per section
+
+**Current synergy status:**
+
+- Glob for all `SYNERGY-*.md` files and read them
+- Count open entries per file and per section
+- Highlight actionable items: Extraction Candidates with `Readiness: ready`,
+  Divergences with `Convergence path: adopt-theirs` or `propose-shared`,
+  They Have / We Don't with `Priority: adopt-soon`
+- Note any Shared Patterns with `Status: drifting`
+
+**Recent conversation context:**
+
+- Review the current session for friction, workarounds, discoveries, and
+  decisions made during development
+
+**Test and coverage status:**
+
+Check `package.json` scripts for a test command. Try in order:
+
+1. `npm test` (if a `test` script exists)
+2. `npm run test:node` (if a `test:node` script exists)
+3. `npm run test` (if a `test` script exists under another variant)
+4. `npm run check` (if a `check` script exists — used by validation-suite projects like this one, vp-knowledge, vp-git)
+
+Run the first that exists and show the last 5 lines of output.
+
+### 3. Draft the retrospective
+
+Create `RETRO-{N}.md` using this template (omit `### Synergy observations`
+if no SYNERGY-\*.md files were found in step 2):
+
+```markdown
+## Sprint {N} Retrospective — {YYYY-MM-DD}
+
+### What went well
+
+- ...
+
+### What could improve
+
+- ...
+
+### Upstream observations
+
+<!-- Review recent work — anything to add to UPSTREAM-*.md files? -->
+
+- ...
+
+### Synergy observations
+
+<!-- From SYNERGY-*.md: extraction-ready candidates first, then drifting
+     patterns, then active convergence paths. Omit if no SYNERGY files. -->
+
+- **Extraction Candidates ready:** <!-- e.g. "validate-helpers (vp-knowledge) — Readiness: ready" or "none" -->
+- **Drifting shared patterns:** <!-- e.g. "BM note format — drifting since 2026-01" or "none" -->
+- **Active convergence paths:** <!-- e.g. "error handling — adopt-theirs from vp-knowledge" or "none" -->
+- **New patterns logged this sprint:** <!-- e.g. "Logged 2 new Extraction Candidates" or "none" -->
+- **Stale entries flagged:** <!-- entries >3 months old, or "none" -->
+
+### Lessons learned
+
+- ...
+```
+
+**Section guidelines:**
+
+- **What went well** — concrete wins: bugs caught, patterns established, clean
+  commits, test improvements. Reference specific files/commits. Focus on process
+  and engineering quality, not just features shipped.
+- **What could improve** — honest assessment of friction, false starts, wasted
+  effort. Not a blame list — focus on systemic issues and what would prevent
+  recurrence.
+- **Upstream observations** — summarize current state of all UPSTREAM files.
+  Log any NEW friction discovered in the session to the appropriate UPSTREAM
+  file using `/upstream-tracker` workflow 1 (Log a new entry). Review recent
+  session work — did any workarounds or local extensions get built this sprint
+  that are self-contained enough to contribute back? If yes, log via
+  `/upstream-tracker` workflow 1 (Log a new entry) with type "Upstream
+  Opportunity". Note trends across packages.
+  Flag stale items (>3 months old).
+- **Synergy observations** — summarize current state of all SYNERGY files.
+  Log any NEW cross-project observations discovered in the session to the
+  appropriate SYNERGY file using `/synergy-tracker` workflow 1 (Log a synergy
+  entry). Report
+  extraction candidates with `Readiness: ready` as sprint-actionable. If any
+  candidates were acted on this sprint, record the outcome. Review recent
+  session work — did any implementation reveal shared patterns with sibling
+  projects, or produce logic worth extracting into a shared package? If yes,
+  log via `/synergy-tracker` workflow 1 (Log a synergy entry). Note trends across sibling projects.
+  Flag stale entries (>3 months old). If no SYNERGY files exist, omit this
+  section from the generated RETRO-NN.md entirely.
+- **Lessons learned** — reusable insights. Each should be a principle that
+  future sessions can apply, not a one-off fact. Format: **Bold principle** —
+  supporting evidence from this sprint.
+
+### 4. Check for trend review
+
+If this is every 4th sprint (Sprint 4, 8, 12, ...), also perform a trend review:
+(Sprint number is the file count from step 1, not a topic-asserted number.)
+
+**UPSTREAM files:** Review all `UPSTREAM-*.md` files — identify common trends,
+evaluate whether open items are still valid, delete non-vendor files with no
+remaining entries.
+
+**SYNERGY files:** Review all `SYNERGY-*.md` files — identify stale entries
+(>3 months), evaluate whether Shared Patterns are still `aligned` or have
+drifted, check if Extraction Candidates with `Readiness: ready` have been acted
+on, and review whether `adopt-theirs` Divergences have been adopted.
+
+**Health audit:** Run bd's full health vocabulary in parallel — five focused
+checks covering infrastructure, template compliance, lifecycle hygiene,
+reference integrity, and dependency-graph integrity. Each command emits JSON
+for stable parsing. Surface counts plus the top 3–5 affected items per check
+in the generated `RETRO-NN.md` under a `### Health audit` subsection.
+
+```bash
+bd doctor --json    # Infrastructure: outdated hooks, gitignore drift, remote config
+bd lint --json      # Template compliance: issues missing required sections per type
+bd stale --json     # Lifecycle: issues with no recent activity
+bd orphans --json   # Reference integrity: refs in commits but issue still open
+bd graph check --json  # Dependency graph: cycles, dangling refs (schema_version: 1)
+```
+
+Per-check guidance:
+
+- **`bd doctor --json`** — parse `warnings[]`. Auto-fix is gated on user
+  consent: present the warning list and prompt before invoking
+  `bd doctor --fix --yes`. Never auto-apply. Note the **false positive** on the
+  Claude Hook Completeness check — it sometimes flags hooks that are
+  intentionally absent or installed via a plugin (see `UPSTREAM-brew--beads.md`
+  for the open friction entry); skip the prompt for that warning class until it
+  is resolved upstream.
+- **`bd lint --json`** — parse `issues[]`. No auto-fix; lint findings require
+  human triage. List affected issue IDs with the missing section names so the
+  maintainer can update them (e.g., `bd update <id>` adding
+  `## Acceptance Criteria` to a `feature`).
+- **`bd stale --json`** — parse `issues[]`. No auto-fix; suggest one of three
+  human actions per issue: defer (lower priority), close (no longer relevant),
+  or work (claim and progress).
+- **`bd orphans --json`** — parse `issues[]`. If `--json` is unavailable on the
+  installed `bd` version, fall back to text parsing of `bd orphans` output.
+  No auto-fix; suggest closing the issue or unmarking the orphan reference.
+- **`bd graph check --json`** — parse the schema-versioned envelope
+  (`{"clean": bool, "cycles": [...] | null, "schema_version": 1, "summary": {...}}`).
+  When `clean: false`, surface cycle paths and dangling refs with fix
+  recommendations (typically `bd dep remove <blocker> <blocked>` to break
+  a cycle, or `bd close` for stale references — `bd dep` uses subcommands,
+  not flag-form). No auto-fix.
+
+Render in the RETRO file as:
+
+```markdown
+### Health audit
+
+- **Infrastructure (`bd doctor`):** {N} warnings — {top items, or "clean"}
+- **Template compliance (`bd lint`):** {N} issues — {top items, or "clean"}
+- **Lifecycle (`bd stale`):** {N} stale issues — {top items, or "clean"}
+- **Reference integrity (`bd orphans`):** {N} orphans — {top items, or "clean"}
+- **Dependency graph (`bd graph check`):** {clean | N cycles, top items}
+- **Stats (`bd stats`):** {total / open / in_progress / closed / ready / blocked counts}
+- **Blocked review (`bd blocked`):** {list blocked issues; for each, run `bd show <id>` to identify its blockers and flag any blockers whose status is currently `closed` — these need `bd update` to re-evaluate readiness}
+- **`bd compact` candidates:** {manual judgment — list closed-issue count and flag if >150 closed since last compact, otherwise "below threshold"}
+```
+
+**Basic Memory graph health** (via Basic Memory MCP tools):
+
+1. Run the knowledge-gardener agent for automated audit (orphans, schema, stale notes, duplicates)
+2. Validate both schemas: call `mcp__basic-memory__schema_validate` with `note_type="npm_package"` and again with `note_type="engineering"`
+3. Call `mcp__basic-memory__schema_diff` on both types to detect drift (new observation categories in use but not in schema, or schema fields rarely used)
+4. If notes cluster around a new unschemaed `type`, call `mcp__basic-memory__schema_infer` and consider creating a new schema
+5. Verify all notes have: frontmatter `type` and `tags`, `## Observations`, `## Relations`
+6. Flag notes missing any layer; fix or create beads issues
+
+**Basic Memory notes (project-independent knowledge base):** Basic Memory is a
+cross-project knowledge store — notes there must be written from a general
+engineering perspective, not referencing project-specific file paths, table names,
+or project structure. Vendor package names (e.g., `@scope/vendor-package`) are
+fine since they're real npm packages. Mentioning this project by name is okay
+when genuinely relevant — just don't make notes only useful within this project.
+Call `mcp__basic-memory__search_notes` and:
+
+- Update notes that have been superseded by new learnings this sprint
+- Remove notes that are too project-specific — generalize or delete
+- Check for duplicate notes across directories and merge them
+- Verify tags are consistent and discoverable
+
+### 5. Create beads issues from findings
+
+Review the "What could improve" and "Lessons learned" sections for actionable
+items that aren't already tracked. Create beads issues for each:
+
+```bash
+bd create "..." -t bug|task|feature|chore -p N --description "..."
+```
+
+(`-t` = type; `-p` = priority: 0=critical, 1=high, 2=medium, 3=low, 4=backlog)
+
+Include code quality issues, process improvements, and any findings that need
+follow-up work. Skip items that are purely observational or already have open
+issues.
+
+**Decision capture.** When a sprint outcome is a *decision* (an architectural
+or product choice with explicit rationale and rejected alternatives) rather
+than a task, bug, or feature, file it as the `decision` issue type — not a
+generic task. Decision-typed issues are queryable as ADRs and follow the
+supersede workflow.
+
+Recognize a decision when the sprint surfaced any of:
+
+- A choice between two or more viable approaches with rationale recorded
+- A reversal or revision of a previous decision (use `supersede` to link)
+- A constraint accepted (e.g., "we will not support X until Y") that future
+  work must respect
+
+For each decision, prompt the user to either:
+
+1. **Invoke the upstream `/beads:decision` slash command** — preferred path.
+   The command lives in the upstream `beads` plugin (NOT vp-beads) and wraps
+   `bd create --type=decision` with structured templates plus
+   record/list/show/supersede operations. Use this for the full lifecycle.
+2. **Or create directly via `bd create --type=decision`** with the four-section
+   template:
+
+   ```markdown
+   ## Decision
+
+   ## Rationale
+
+   ## Alternatives Considered
+
+   ## Affects
+   ```
+
+   The first three are required by `validation.on-create=error`; `## Affects`
+   is conventional and lists impacted components, files, or future work.
+
+**Lifecycle:** decision-typed issues stay **open** while the decision is in
+force. `open` = active decision, `closed` = superseded or reversed (NOT
+closed-on-create). The retrospective never auto-closes decisions — the
+upstream `/beads:decision` slash command handles supersession when the
+decision is later revised. Cross-reference that command for the full
+lifecycle (record/list/show/supersede) rather than implementing it here.
+
+### 6. Knowledge gap audit
+
+Run `/knowledge-gaps` (if vp-knowledge is installed):
+
+`/knowledge-gaps` scans all package manifests in the project (npm, Rust crates,
+Go modules, PHP Composer, Python PyPI, Ruby gems) and tool manifests (Brewfile,
+GitHub Actions workflows, Dockerfile, VSCode extensions). It cross-references
+each dependency against Basic Memory notes to identify undocumented packages and
+tools.
+
+Steps:
+
+1. Run `/knowledge-gaps` — it handles all manifest types automatically. If
+   vp-knowledge is not installed, skip this step and note in the retrospective
+   under "What could improve" that knowledge gap coverage was not audited.
+2. Include Tier 1 gaps in the retrospective under "What could improve"
+3. Create beads issues for the top 3 undocumented packages or tools
+
+### 7. Write project-independent learnings to Basic Memory
+
+Basic Memory is a **cross-project knowledge base** — it persists across all
+repositories and sessions. Notes written here must be generalizable engineering
+knowledge, not project-specific implementation details. Ask: "Would this note help
+me on a completely different project using the same technology?" If yes, write it.
+If it only makes sense in the context of this codebase, it belongs in `MEMORY.md`
+or the project `CLAUDE.md` instead.
+
+For each learning, search first, then create or update:
+
+- If no matching note exists: call `mcp__basic-memory__write_note` to create it
+- If a note exists with new content: call `mcp__basic-memory__read_note` first
+  to get exact content, then call `mcp__basic-memory__edit_note` with
+  `find_replace` or `replace_section` — never call `write_note` on an existing
+  note (it requires `overwrite=True` and risks replacing the full note content)
+
+Organize by engineering domain:
+
+| Directory | Topics |
+|-----------|--------|
+| `engineering/fastify/` | Plugin patterns, lifecycle, error handling |
+| `engineering/frontend/` | Web components, CSS, dark mode, SSR, a11y |
+| `engineering/database/` | Query patterns, migrations, PostgreSQL |
+| `engineering/testing/` | Test conventions, infrastructure, coverage |
+| `engineering/tooling/` | Linter config, build pipelines, knip |
+| `engineering/agents/` | Orchestration, workflow, quality gates |
+
+**Guidelines:**
+
+- Only write notes for patterns confirmed this sprint — not speculative
+- Use concrete code examples, not abstract principles
+- Tag notes for discoverability
+- **No project-specific internals** — replace project file paths with generic
+  descriptions (e.g., "route handler file" not "lib/routes/settings.js"),
+  omit table names, and describe patterns in terms of the technology, not
+  the application. Referencing vendor packages by npm name (e.g.,
+  `@scope/vendor-package`) is fine — they're real published packages.
+  Mentioning this project by name is okay when genuinely relevant — just
+  don't make the note only useful within this project.
+- **Division of labor with upstream-tracker and synergy-tracker.** This step
+  writes `engineering/*` notes (patterns, conventions, lessons learned). For
+  upstream friction about specific packages or tools, use `/upstream-tracker`
+  workflow 6 (Promote to Basic Memory) instead — it writes to the
+  `## Upstream Friction` section of entity notes (`npm/*`, `brew/*`, etc.),
+  avoiding duplication. For cross-project extraction opportunities tracked in
+  `SYNERGY-*.md` files, use `/synergy-tracker` — it manages the extraction
+  lifecycle and any corresponding Basic Memory notes. For packages not yet in
+  Basic Memory, suggest `/package-intel` or `/tool-intel` for enrichment first.
+  **NEVER write to `engineering/agents/vp-plugins-*` paths from this step**
+  — those are sibling-relationship notes owned by `/synergy-tracker` workflow 5
+  (Promote to Basic Memory). For cross-project lessons that touch a
+  sibling-relationship, log via `/synergy-tracker` workflow 1 (Log a synergy
+  entry) and let workflow 5 (Promote to Basic Memory) promote them; do not
+  shortcut the relationship-note ownership boundary by writing
+  `engineering/agents/vp-plugins-*` directly here.
+
+### 8. Suggest documentation updates
+
+After writing the retro, suggest updates to:
+
+- Project `CLAUDE.md` — new conventions, gotchas, or commands discovered
+- `MEMORY.md` — stable patterns confirmed across sprints
+- `README.md` — if project structure or commands changed
+
+Present suggestions to the user for approval before editing.

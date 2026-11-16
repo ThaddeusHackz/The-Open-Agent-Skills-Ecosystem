@@ -1,0 +1,1750 @@
+#!/usr/bin/env python3
+"""Extract page-level PDF assets for later model-side semantic figure matching.
+
+Each page gets a count of its embedded image objects, and its Figure/Table
+captions become figure-level crops: a bounding box covering the visual content
+next to the caption is rendered from the page pixmap at high DPI.  This produces
+complete, human-readable figures even when the PDF stores them as many small
+xref fragments or as pure vector art, so the fragments themselves are only
+counted, never written to disk.
+
+"""
+
+from __future__ import annotations
+
+import argparse
+import io
+import re
+import unicodedata
+from functools import lru_cache
+from pathlib import Path
+
+from _identity import require_accepted_fetch_artifact
+from common import (
+    default_assets_dir,
+    emit,
+    fitz,
+    maybe_load_json_record,
+    normalize_whitespace,
+)
+from pdf_captions import CAPTION_RE, looks_like_data_row, select_caption_blocks
+
+try:
+    from PIL import Image  # type: ignore
+except ImportError:  # pragma: no cover
+    Image = None
+
+
+
+@lru_cache(maxsize=1)
+def load_pytesseract():
+    """Import pytesseract on first OCR use; importing it costs every script that imports this module."""
+    try:
+        import pytesseract  # type: ignore
+    except ImportError:
+        return None
+    return pytesseract
+
+FIGURE_RENDER_DPI = 96
+PAGE_PREVIEW_DPI = 96
+GRID_COLOR = (0.85, 0.1, 0.1)
+GRID_LINE_STYLE = {"color": GRID_COLOR, "width": 0.75, "stroke_opacity": 0.45}
+MIN_FIGURE_HEIGHT_PT = 60
+MIN_VISUAL_FIGURE_HEIGHT_PT = 40
+MIN_FIGURE_WIDTH_PT = 100
+MIN_TABLE_HEIGHT_PT = 24
+FULL_PAGE_IMAGE_RATIO = 0.7
+RUNNING_HEADER_RATIO = 0.05
+RUNNING_HEADER_SEARCH_RATIO = 0.1
+SIDE_FIGURE_PANEL_GAP_PT = 24.0
+# A figure printed under its caption starts within this distance of it.
+CAPTION_FIGURE_GAP_PT = 24.0
+
+_TEXT_TABLE_SEPARATOR_RE = re.compile(r"(?:\t+|\s{2,}|[|;])")
+_TEXT_TABLE_PROSE_STARTERS = {
+    "a",
+    "an",
+    "it",
+    "our",
+    "that",
+    "the",
+    "these",
+    "this",
+    "those",
+    "we",
+}
+_TEXT_TABLE_PROSE_CONNECTORS = {
+    "although",
+    "because",
+    "therefore",
+    "whereas",
+    "which",
+}
+
+
+def _looks_like_text_table_row(text: str) -> bool:
+    """Heuristic: a short textual row from a comparison/categorization table."""
+    raw = text.strip()
+    cleaned = normalize_whitespace(raw)
+    tokens = cleaned.split()
+    if len(tokens) < 3 or len(cleaned) > 180:
+        return False
+
+    cells = [cell.strip() for cell in _TEXT_TABLE_SEPARATOR_RE.split(raw) if cell.strip()]
+    if len(cells) >= 3 and all(len(cell.split()) <= 8 for cell in cells):
+        return True
+
+    normalized_tokens = [tok.strip(".,:()[]{}").lower() for tok in tokens]
+    if cleaned.endswith((".", "?", "!")):
+        return False
+    if normalized_tokens[0] in _TEXT_TABLE_PROSE_STARTERS:
+        return False
+    if any(tok in _TEXT_TABLE_PROSE_CONNECTORS for tok in normalized_tokens):
+        return False
+
+    average_token_length = sum(len(tok.strip(".,:()[]{}")) for tok in tokens) / len(tokens)
+    long_tokens = sum(1 for tok in tokens if len(tok.strip(".,:()[]{}")) > 18)
+    return len(tokens) <= 8 and average_token_length <= 9.0 and long_tokens <= 1
+
+
+def _rect_area(bbox: tuple[float, float, float, float]) -> float:
+    return max(0.0, bbox[2] - bbox[0]) * max(0.0, bbox[3] - bbox[1])
+
+
+def _intersection_area(
+    a: tuple[float, float, float, float],
+    b: tuple[float, float, float, float],
+) -> float:
+    x0 = max(a[0], b[0])
+    y0 = max(a[1], b[1])
+    x1 = min(a[2], b[2])
+    y1 = min(a[3], b[3])
+    return _rect_area((x0, y0, x1, y1))
+
+
+def _rects_intersect(
+    a: tuple[float, float, float, float],
+    b: tuple[float, float, float, float],
+) -> bool:
+    return _intersection_area(a, b) > 0
+
+
+def _classify_visual_quality(
+    *,
+    kind: str,
+    page_coverage_ratio: float,
+    visual_rect_count: int,
+    visual_body_ratio: float,
+    paragraph_text_chars: int,
+    table_body_rows: int,
+    caption_text_chars: int,
+    other_caption_labels: list[str] | None = None,
+) -> dict:
+    """Classify whether a caption-matched crop is visually usable.
+
+    This is intentionally conservative. A label/caption match proves identity,
+    but not that the rendered crop contains the figure or table body.
+    """
+    normalized_kind = kind.strip().lower()
+    other_caption_labels = list(other_caption_labels or [])
+    reasons: list[str] = []
+
+    if normalized_kind == "table":
+        text_per_table_row = paragraph_text_chars / max(1, table_body_rows)
+        if table_body_rows <= 0:
+            reasons.append("table_body_missing")
+        if table_body_rows <= 1 and visual_body_ratio < 0.03 and caption_text_chars >= 40:
+            reasons.append("caption_only_suspected")
+        # Dense tables naturally contain many text spans. Treat prose-like text
+        # as contamination when table structure is weak or the text density is
+        # far higher than the detected table body can explain.
+        if paragraph_text_chars >= 450 and (
+            table_body_rows <= 2
+            or (paragraph_text_chars >= 900 and visual_body_ratio <= 0.03 and text_per_table_row > 90)
+            or text_per_table_row > 140
+        ):
+            reasons.append("table_text_contamination_suspected")
+        if other_caption_labels:
+            reasons.append("multiple_caption_regions_suspected")
+        status = "reject" if reasons else "usable"
+    else:
+        if other_caption_labels:
+            reasons.append("multiple_caption_regions_suspected")
+        visual_dominant = visual_rect_count >= 3 and visual_body_ratio >= 0.18
+        if paragraph_text_chars >= 450 and not visual_dominant:
+            reasons.append("large_text_block_suspected")
+        if page_coverage_ratio >= 0.70 and paragraph_text_chars >= 250:
+            reasons.append("oversized_page_crop")
+        if visual_rect_count <= 1 and visual_body_ratio < 0.03:
+            reasons.append("low_visual_body_ratio")
+        if any(
+            code in reasons
+            for code in (
+                "multiple_caption_regions_suspected",
+                "large_text_block_suspected",
+                "oversized_page_crop",
+                "low_visual_body_ratio",
+            )
+        ):
+            status = "reject"
+        elif visual_rect_count == 0 or visual_body_ratio < 0.08:
+            if "low_visual_body_ratio" not in reasons:
+                reasons.append("low_visual_body_ratio")
+            status = "review"
+        else:
+            status = "usable"
+
+    return {
+        "visual_quality_status": status,
+        "quality_reason_codes": reasons,
+        "page_coverage_ratio": round(page_coverage_ratio, 6),
+        "visual_rect_count": int(visual_rect_count),
+        "visual_body_ratio": round(visual_body_ratio, 6),
+        "paragraph_text_chars": int(paragraph_text_chars),
+        "table_body_rows": int(table_body_rows),
+        "caption_text_chars": int(caption_text_chars),
+        "other_caption_count": len(other_caption_labels),
+        "other_caption_labels": other_caption_labels,
+    }
+
+
+def parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description=__doc__ or "extract pdf assets")
+    p.add_argument("--input", required=True, help="Successful fetch JSON path or JSON artifact.")
+    p.add_argument("--output", default="", help="Output JSON path.")
+    p.add_argument("--assets-dir", default="", help="Optional explicit assets directory.")
+    p.add_argument("--max-pages", type=int, default=40, help="Maximum pages to scan.")
+    p.add_argument("--min-searchable-chars", type=int, default=100, help="Minimum characters for a page to count as searchable text.")
+    p.add_argument("--ocr-dpi", type=int, default=300, help="DPI used when OCR fallback is needed.")
+    p.add_argument("--figure-dpi", type=int, default=FIGURE_RENDER_DPI, help="DPI for figure-level page rendering.")
+    return p
+
+
+def ensure_record(input_value: str) -> dict:
+    record = maybe_load_json_record(input_value)
+    if record is None:
+        raise SystemExit("extract_pdf_assets.py requires a JSON acquisition artifact.")
+    return dict(require_accepted_fetch_artifact(record, "extract_pdf_assets.py"))
+
+
+def save_image_bytes(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+
+
+def ocr_page(page, dpi: int) -> str:
+    pytesseract = load_pytesseract()
+    if fitz is None or pytesseract is None or Image is None:
+        return ""
+    scale = dpi / 72.0
+    matrix = fitz.Matrix(scale, scale)
+    pix = page.get_pixmap(matrix=matrix, alpha=False)
+    image = Image.open(io.BytesIO(pix.tobytes("png")))
+    return normalize_whitespace(pytesseract.image_to_string(image))
+
+
+def count_page_images(page) -> int:
+    """Count the distinct embedded image objects drawn on a page.
+
+    Only the count is kept: it tells figure planning that a page carries a
+    visual. The objects themselves are often fragments of one figure, so they
+    are never written out; figure crops come from extract_figure_regions.
+    """
+    return len({int(info[0]) for info in page.get_images(full=True) if info})
+
+
+# ---------------------------------------------------------------------------
+# Figure-level extraction: caption-anchored page-render cropping
+# ---------------------------------------------------------------------------
+
+def _collect_xref_rects(page) -> list[tuple[float, float, float, float]]:
+    """Gather the page-level bounding boxes of all embedded images."""
+    rects: list[tuple[float, float, float, float]] = []
+    for img_info in page.get_images(full=True):
+        xref = int(img_info[0])
+        try:
+            img_rects = page.get_image_rects(xref)
+        except Exception:
+            continue
+        for r in img_rects:
+            if r.is_empty or r.is_infinite:
+                continue
+            rects.append((r.x0, r.y0, r.x1, r.y1))
+    return rects
+
+
+def _collect_drawing_rects(page) -> list[tuple[float, float, float, float]]:
+    """Gather bounding boxes of vector drawings on the page."""
+    rects: list[tuple[float, float, float, float]] = []
+    clips: list[tuple[int, fitz.Rect]] = []
+    try:
+        for drawing in page.get_drawings(extended=True):
+            level = drawing.get("level", 0)
+            while clips and clips[-1][0] >= level:
+                clips.pop()
+            if drawing.get("type") == "clip":
+                clips.append((level, fitz.Rect(drawing["scissor"])))
+                continue
+            r = drawing.get("rect")
+            if r is None or drawing.get("type") == "group":
+                continue
+            rect = fitz.Rect(r)
+            if clips:
+                rect &= clips[-1][1]
+            if rect.is_empty or rect.is_infinite:
+                continue
+            if rect.width < 10 or rect.height < 10:
+                continue
+            rects.append((rect.x0, rect.y0, rect.x1, rect.y1))
+    except Exception:
+        pass
+    return rects
+
+
+@lru_cache(maxsize=1)
+def _page_visual_rects(page) -> tuple[tuple[float, float, float, float], ...]:
+    """Return a page's image and drawing boxes; every caption on it reads them."""
+    return tuple(_collect_xref_rects(page) + _collect_drawing_rects(page))
+
+
+def _visual_signal_for_bbox(page, bbox: tuple[float, float, float, float]) -> tuple[int, float]:
+    """Return visual rect count and visual-area ratio inside a crop."""
+    crop_area = _rect_area(bbox)
+    if crop_area <= 0:
+        return 0, 0.0
+    rects = _page_visual_rects(page)
+    count = 0
+    visual_area = 0.0
+    for rect in rects:
+        area = _intersection_area(rect, bbox)
+        if area <= 0:
+            continue
+        count += 1
+        visual_area += area
+    return count, min(1.0, visual_area / crop_area)
+
+
+def _find_body_text_blocks(page) -> list[tuple[float, float, float, float, str]]:
+    """Return bounding boxes of body-text blocks (non-caption) sorted top-to-bottom."""
+    results: list[tuple[float, float, float, float, str]] = []
+    blocks = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)["blocks"]
+    for block in blocks:
+        if block.get("type") != 0:
+            continue
+        full_text = ""
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                full_text += span.get("text", "")
+        full_text = full_text.strip()
+        if len(full_text) < 40:
+            continue
+        if CAPTION_RE.match(full_text):
+            continue
+        bb = block["bbox"]
+        results.append((bb[0], bb[1], bb[2], bb[3], full_text))
+    results.sort(key=lambda b: b[1])
+    return results
+
+
+def _find_paragraph_blocks(
+    page, *, min_chars: int = 200, exclude_cell_blocks: bool = False
+) -> list[tuple[float, float, float, float, str]]:
+    """Return only large prose blocks that look like running paragraphs.
+
+    PyMuPDF often groups an entire tabular column ("DS-Ulysses 629.9 418.3 ...")
+    into a single text block, so the legacy ``_find_body_text_blocks`` filter
+    catches table cells too aggressively.  For deciding whether we have walked
+    out of a table region we want a stricter notion: only blocks whose total
+    text mass and line count look like real prose count as paragraph blocks.
+
+    ``exclude_cell_blocks`` also drops blocks made mostly of short cells, as a
+    table set as one block is, whatever its cells hold ("O(n · d)", "HED").
+    Table row walks need this; figure bounds keep such blocks as barriers.
+    """
+    results: list[tuple[float, float, float, float, str]] = []
+    blocks = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)["blocks"]
+    for block in blocks:
+        if block.get("type") != 0:
+            continue
+        lines = block.get("lines", [])
+        full_text = ""
+        for line in lines:
+            for span in line.get("spans", []):
+                full_text += span.get("text", "")
+        full_text = full_text.strip()
+        if len(full_text) < min_chars:
+            continue
+        if CAPTION_RE.match(full_text):
+            continue
+        # Real prose paragraphs have many lines and few numeric-heavy lines.
+        if len(lines) < 3:
+            continue
+        numeric_line_share = 0
+        for line in lines:
+            line_text = "".join(s.get("text", "") for s in line.get("spans", [])).strip()
+            if looks_like_data_row(line_text):
+                numeric_line_share += 1
+        if numeric_line_share > len(lines) * 0.4:
+            continue
+        if exclude_cell_blocks:
+            # Prose lines run across the block; table cells do not.
+            block_width = max(1.0, block["bbox"][2] - block["bbox"][0])
+            wide_lines = sum(
+                1 for line in lines if line["bbox"][2] - line["bbox"][0] >= block_width * 0.5
+            )
+            if wide_lines * 2 < len(lines):
+                continue
+        bb = block["bbox"]
+        results.append((bb[0], bb[1], bb[2], bb[3], full_text))
+    results.sort(key=lambda b: b[1])
+    return results
+
+
+def _looks_like_table_cells(text: str) -> bool:
+    """Heuristic: a row of mixed values, marks, and short labels, not a sentence."""
+    tokens = text.split()
+    words = [
+        token
+        for token in tokens
+        if len(re.sub(r"\W", "", token)) >= 2 and not any(char.isdigit() for char in token)
+    ]
+    return len(words) * 2 < len(tokens)
+
+
+def _inner_image_rects(page) -> list[tuple[float, float, float, float]]:
+    """Return embedded figures, leaving out the full-page image of a scanned page."""
+    page_area = _rect_area(tuple(page.rect))
+    return [
+        rect
+        for rect in _collect_xref_rects(page)
+        if _rect_area(rect) <= page_area * FULL_PAGE_IMAGE_RATIO
+    ]
+
+
+def _count_paragraph_text_chars_in_bbox(
+    page,
+    bbox: tuple[float, float, float, float],
+    caption_bbox: tuple[float, float, float, float],
+) -> int:
+    """Count prose-like text intersecting a crop, excluding the caption area."""
+    chars = 0
+    images = _inner_image_rects(page)
+    blocks = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)["blocks"]
+    for block in blocks:
+        if block.get("type") != 0:
+            continue
+        bb = tuple(block["bbox"])
+        if not _rects_intersect(bb, bbox):
+            continue
+        if _intersection_area(bb, caption_bbox) / max(_rect_area(bb), 1.0) > 0.6:
+            continue
+        if any(_intersection_area(bb, image) / max(_rect_area(bb), 1.0) > 0.6 for image in images):
+            continue
+
+        lines = block.get("lines", [])
+        line_texts = [
+            "".join(s.get("text", "") for s in line.get("spans", [])).strip()
+            for line in lines
+        ]
+        line_texts = [text for text in line_texts if text]
+        full_text = normalize_whitespace(" ".join(line_texts))
+        if len(full_text) < 80:
+            continue
+        if CAPTION_RE.match(full_text):
+            continue
+        numeric_rows = sum(
+            1 for text in line_texts if looks_like_data_row(text) or _looks_like_table_cells(text)
+        )
+        if line_texts and numeric_rows > len(line_texts) * 0.4:
+            continue
+        chars += len(full_text)
+    return chars
+
+
+def _other_caption_labels_for_crop(
+    caption_anchors: list[dict],
+    current_anchor: dict,
+    bbox: tuple[float, float, float, float],
+) -> list[str]:
+    """Return other caption labels substantially covered by this crop."""
+    labels: list[str] = []
+    current_label = normalize_whitespace(str(current_anchor.get("label", "")))
+    current_bbox = tuple(current_anchor.get("bbox", ()))
+
+    for anchor in caption_anchors:
+        label = normalize_whitespace(str(anchor.get("label", "")))
+        anchor_bbox = tuple(anchor.get("bbox", ()))
+        label_bbox = tuple(anchor.get("label_bbox", anchor_bbox))
+        if not label or len(anchor_bbox) != 4:
+            continue
+        if label == current_label and anchor_bbox == current_bbox:
+            continue
+
+        overlap = _intersection_area(anchor_bbox, bbox)
+        label_overlap = _intersection_area(label_bbox, bbox) if len(label_bbox) == 4 else 0.0
+        if overlap <= 0 and label_overlap <= 0:
+            continue
+        caption_overlap_ratio = overlap / max(_rect_area(anchor_bbox), 1.0)
+        label_overlap_ratio = label_overlap / max(_rect_area(label_bbox), 1.0) if len(label_bbox) == 4 else 0.0
+        if caption_overlap_ratio < 0.5 and label_overlap_ratio < 0.15:
+            continue
+        labels.append(label)
+
+    return sorted(set(labels))
+
+
+def _quality_signals_for_crop(
+    page,
+    kind: str,
+    bbox: tuple[float, float, float, float],
+    caption_anchor: dict,
+    page_rect,
+    *,
+    table_body_rows: int,
+    caption_anchors: list[dict] | None = None,
+) -> dict:
+    page_area = _rect_area((page_rect.x0, page_rect.y0, page_rect.x1, page_rect.y1))
+    page_coverage_ratio = _rect_area(bbox) / page_area if page_area > 0 else 0.0
+    visual_rect_count, visual_body_ratio = _visual_signal_for_bbox(page, bbox)
+    caption_bbox = tuple(caption_anchor["bbox"])
+    paragraph_text_chars = _count_paragraph_text_chars_in_bbox(page, bbox, caption_bbox)
+    caption_text_chars = len(normalize_whitespace(str(caption_anchor.get("line_text", ""))))
+    other_caption_labels = _other_caption_labels_for_crop(caption_anchors or [], caption_anchor, bbox)
+    return _classify_visual_quality(
+        kind=kind,
+        page_coverage_ratio=page_coverage_ratio,
+        visual_rect_count=visual_rect_count,
+        visual_body_ratio=visual_body_ratio,
+        paragraph_text_chars=paragraph_text_chars,
+        table_body_rows=table_body_rows,
+        caption_text_chars=caption_text_chars,
+        other_caption_labels=other_caption_labels,
+    )
+
+
+def _clip_to_page(
+    bbox: tuple[float, float, float, float],
+    page_rect,
+    *,
+    padding: float = 4.0,
+) -> tuple[float, float, float, float]:
+    x0, y0, x1, y1 = bbox
+    x0 = max(page_rect.x0, x0 - padding)
+    y0 = max(page_rect.y0, y0 - padding)
+    x1 = min(page_rect.x1, x1 + padding)
+    y1 = min(page_rect.y1, y1 + padding)
+    return (x0, y0, x1, y1)
+
+
+def _running_header_bottom(page) -> float:
+    return page.rect.y0 + page.rect.height * RUNNING_HEADER_RATIO
+
+
+def _top_line_keys(page) -> dict[str, tuple[float, float]]:
+    """Map each long line in the page's top band, digits removed, to its y span."""
+    band_bottom = page.rect.y0 + page.rect.height * RUNNING_HEADER_SEARCH_RATIO
+    keys: dict[str, tuple[float, float]] = {}
+    for line in _collect_text_lines(page):
+        if line["bbox"][1] > band_bottom:
+            break
+        key = re.sub(r"[\d\s]+", " ", line["text"]).strip().casefold()
+        # Short keys match table header cells repeated on the next page.
+        if len(key) >= 20:
+            keys[key] = (line["bbox"][1], line["bbox"][3])
+    return keys
+
+
+def _repeated_running_header_bottom(page) -> float:
+    """Return the bottom of a top-of-page line repeated on a nearby page.
+
+    Running headers sit lower than ``_running_header_bottom`` in some
+    templates; a long line repeated at the same height near the top of a
+    nearby page is a header there too. Odd and even pages may carry different
+    headers, so pages two away count.
+    """
+    doc = page.parent
+    keys = _top_line_keys(page)
+    if doc is None or not keys:
+        return page.rect.y0
+    bottom = page.rect.y0
+    for offset in (-2, -1, 1, 2):
+        number = page.number + offset
+        if not 0 <= number < len(doc):
+            continue
+        other = _top_line_keys(doc[number])
+        for key, (y0, y1) in keys.items():
+            if key in other and abs(other[key][0] - y0) <= 3.0:
+                bottom = max(bottom, y1)
+    return bottom
+
+
+def _grow_bbox_over_figure_labels(
+    page,
+    bbox: tuple[float, float, float, float],
+    *,
+    upper_bound: float,
+    lower_bound: float,
+    x_range: tuple[float, float] | None = None,
+) -> tuple[float, float, float, float]:
+    """Extend a visual bbox over short nearby text such as axis labels."""
+    paragraph_blocks = _find_paragraph_blocks(page)
+    header_bottom = _running_header_bottom(page)
+    labels = []
+    for line in _collect_text_lines(page):
+        text = normalize_whitespace(str(line.get("text", "")))
+        bb = tuple(line.get("bbox", ()))
+        if not (
+            len(bb) != 4
+            or len(text) > 80
+            or CAPTION_RE.match(text)
+            or bb[1] >= lower_bound - 1.0
+            or bb[3] <= upper_bound
+            or bb[1] < header_bottom
+            or (x_range is not None and (bb[0] < x_range[0] or bb[2] > x_range[1]))
+            or _line_is_inside_any_block(bb, paragraph_blocks)
+        ):
+            labels.append(bb)
+
+    # Inside a known column every nearby label belongs to the figure.
+    max_horizontal_gap = 36.0 if x_range is None else 72.0
+
+    def absorb(active, *, narrow_only: bool):
+        for bb in labels:
+            horizontal_gap = max(active[0] - bb[2], bb[0] - active[2], 0.0)
+            vertical_gap = max(active[1] - bb[3], bb[1] - active[3], 0.0)
+            narrow = bb[2] - bb[0] <= (active[2] - active[0]) * 0.4
+            if (vertical_gap == 0.0 and horizontal_gap <= max_horizontal_gap) or (
+                (narrow or not narrow_only) and horizontal_gap == 0.0 and vertical_gap <= 12.0
+            ):
+                active = (
+                    min(active[0], bb[0]),
+                    min(active[1], bb[1]),
+                    max(active[2], bb[2]),
+                    max(active[3], min(bb[3], lower_bound - 2.0)),
+                )
+        return active
+
+    active_bbox = absorb(bbox, narrow_only=False)
+    # Repeat for labels narrower than the figure: full-width lines above are
+    # body text, and chaining through them would swallow the column.
+    while (grown := absorb(active_bbox, narrow_only=True)) != active_bbox:
+        active_bbox = grown
+    return active_bbox
+
+
+def _captions_share_column(first: dict, second: dict) -> bool:
+    x0 = max(first["bbox"][0], second["bbox"][0])
+    x1 = min(first["bbox"][2], second["bbox"][2])
+    narrower = min(
+        first["bbox"][2] - first["bbox"][0],
+        second["bbox"][2] - second["bbox"][0],
+    )
+    return x1 - x0 > narrower * 0.3
+
+
+def _caption_column(caption_anchor: dict, page_rect) -> tuple[float, float]:
+    """Return a caption's horizontal span, widened to its column when it is short."""
+    x0, _, x1, _ = caption_anchor["bbox"]
+    middle = (page_rect.x0 + page_rect.x1) / 2.0
+    if x1 <= middle:
+        return x0, middle
+    if x0 >= middle:
+        return middle, x1
+    return x0, x1
+
+
+def _is_beside_caption(box: tuple[float, ...], caption_anchor: dict, page_rect) -> bool:
+    x0, x1 = _caption_column(caption_anchor, page_rect)
+    return box[0] >= x1 - 2.0 or box[2] <= x0 + 2.0
+
+
+def _next_column_occupants(
+    page,
+    rects: list[tuple[float, float, float, float]],
+    caption_anchor: dict,
+    caption_anchors: list[dict],
+) -> list[tuple[float, ...]]:
+    """Return prose and other captions beside a figure's visuals.
+
+    A column-width caption can sit under a figure that spans the page, so
+    visuals beside it only belong to something else when that column is in use.
+    """
+    top = min(rect[1] for rect in rects)
+    cap_y0 = caption_anchor["bbox"][1]
+    # Prose fills a column; a narrow block is a label list inside the figure.
+    min_prose_width = page.rect.width * 0.3
+    occupants = [
+        block[:4]
+        for block in _find_paragraph_blocks(page)
+        if block[2] - block[0] >= min_prose_width
+    ]
+    occupants += [a["bbox"] for a in caption_anchors if a["bbox"] != caption_anchor["bbox"]]
+    return [
+        box
+        for box in occupants
+        if _is_beside_caption(box, caption_anchor, page.rect)
+        and box[1] < cap_y0 - 5.0
+        and box[3] > top + 5.0
+    ]
+
+
+def _column_x_range(
+    bbox: tuple[float, float, float, float],
+    caption_anchor: dict,
+    occupants: list[tuple[float, ...]],
+    page_rect,
+) -> tuple[float, float]:
+    cap_x0, cap_x1 = _caption_column(caption_anchor, page_rect)
+    left = [box[2] for box in occupants if box[2] <= cap_x0 + 2.0]
+    right = [box[0] for box in occupants if box[0] >= cap_x1 - 2.0]
+    return (
+        max([min(bbox[0], cap_x0) - 24.0, *left]),
+        min([max(bbox[2], cap_x1) + 24.0, *right]),
+    )
+
+
+def _is_framed(box: tuple[float, ...], visuals: list[tuple[float, float, float, float]]) -> bool:
+    return any(
+        rect[0] <= box[0] + 2.0
+        and rect[1] <= box[1] + 2.0
+        and rect[2] >= box[2] - 2.0
+        and rect[3] >= box[3] - 2.0
+        for rect in visuals
+    )
+
+
+def _figure_ceiling(page, caption_anchor: dict, prev_anchor: dict | None) -> float:
+    """Return the highest y a figure can reach: the previous caption or its column's prose."""
+    ceiling = prev_anchor["bbox"][3] + 2.0 if prev_anchor is not None else 0.0
+    cap_x0, cap_y0, cap_x1, _ = caption_anchor["bbox"]
+    middle = (page.rect.x0 + page.rect.x1) / 2.0
+    if cap_x0 < middle < cap_x1:
+        return ceiling
+    min_prose_width = page.rect.width * 0.3
+    prose = [
+        block
+        for block in _find_paragraph_blocks(page)
+        if block[3] <= cap_y0
+        and block[2] - block[0] >= min_prose_width
+        and ((block[0] + block[2]) / 2.0 < middle) == (cap_x1 <= middle)
+    ]
+    visuals = _page_visual_rects(page)
+    if not prose or not visuals:
+        return ceiling
+    # Text inside a frame belongs to the figure drawn around it.
+    return max([ceiling, *(block[3] for block in prose if not _is_framed(block, visuals))])
+
+
+def _visuals_above_caption(
+    page,
+    caption_anchor: dict,
+    prev_anchor: dict | None,
+    caption_anchors: list[dict],
+) -> list[tuple[float, float, float, float]]:
+    caption_y_top = caption_anchor["bbox"][1]
+    upper_bound = _figure_ceiling(page, caption_anchor, prev_anchor)
+    relevant: list[tuple[float, float, float, float]] = []
+    for r in _page_visual_rects(page):
+        ry_mid = (r[1] + r[3]) / 2.0
+        if upper_bound <= ry_mid <= caption_y_top + 5:
+            clipped_y1 = min(r[3], caption_y_top - 2.0)
+            if clipped_y1 > r[1]:
+                relevant.append((r[0], r[1], r[2], clipped_y1))
+    if relevant and _next_column_occupants(page, relevant, caption_anchor, caption_anchors):
+        return [rect for rect in relevant if not _is_beside_caption(rect, caption_anchor, page.rect)]
+    return relevant
+
+
+def _estimate_figure_bbox_above_caption(
+    page,
+    caption_anchor: dict,
+    prev_anchor: dict | None,
+    page_rect,
+    caption_anchors: list[dict] | None = None,
+) -> tuple[float, float, float, float] | None:
+    """Estimate the bounding box of the figure that lives ABOVE its caption.
+
+    Strategy:
+    1. Collect all xref image rects and vector drawing rects on the page.
+    2. Keep only those rects whose vertical centre is between the previous
+       boundary (top of page or previous caption) and the current caption.
+    3. Union them and expand slightly for padding.
+    4. If no rects are found (pure-text or OCR page), use the region between
+       the nearest body-text block above and the caption.
+    """
+    caption_y_top = caption_anchor["bbox"][1]
+    upper_bound = _figure_ceiling(page, caption_anchor, prev_anchor)
+
+    relevant = _visuals_above_caption(page, caption_anchor, prev_anchor, caption_anchors or [])
+
+    if relevant:
+        active_bbox = (
+            min(r[0] for r in relevant),
+            min(r[1] for r in relevant),
+            max(r[2] for r in relevant),
+            max(r[3] for r in relevant),
+        )
+        occupants = _next_column_occupants(page, relevant, caption_anchor, caption_anchors or [])
+        x_range = None
+        if occupants:
+            x_range = _column_x_range(active_bbox, caption_anchor, occupants, page_rect)
+        x0, y0, x1, y1 = _grow_bbox_over_figure_labels(
+            page,
+            active_bbox,
+            upper_bound=upper_bound,
+            lower_bound=caption_y_top,
+            x_range=x_range,
+        )
+    else:
+        body_blocks = _find_body_text_blocks(page)
+        nearest_above_y = upper_bound
+        for bb in body_blocks:
+            if bb[3] < caption_y_top - 5 and bb[3] > nearest_above_y:
+                nearest_above_y = bb[3]
+        y0 = nearest_above_y + 2.0
+        x0 = page_rect.x0
+        x1 = page_rect.x1
+        y1 = caption_y_top - 2.0
+
+    bbox = _clip_to_page((x0, y0, x1, y1), page_rect)
+    bbox = (bbox[0], bbox[1], bbox[2], min(bbox[3], caption_y_top - 1.0))
+    if not relevant:
+        below_header = (bbox[0], max(bbox[1], _running_header_bottom(page)), bbox[2], bbox[3])
+        if below_header[1] >= below_header[3] or not page.get_text("text", clip=below_header).strip():
+            return None
+    width = bbox[2] - bbox[0]
+    height = bbox[3] - bbox[1]
+    min_height = MIN_VISUAL_FIGURE_HEIGHT_PT if relevant else MIN_FIGURE_HEIGHT_PT
+    if width < MIN_FIGURE_WIDTH_PT or height < min_height:
+        return None
+    return bbox
+
+
+def _estimate_figure_bbox_below_caption(
+    page,
+    caption_anchor: dict,
+    caption_anchors: list[dict],
+    page_rect,
+) -> tuple[float, float, float, float] | None:
+    """Estimate the figure printed under its caption, as journals such as JMIR set it.
+
+    The caller tries this only when no visual sits above the caption. The figure
+    must start right under the caption, and it must not end at a caption of its
+    own, which would make it the next figure.
+    """
+    cap_y1 = caption_anchor["bbox"][3]
+    col_x0, col_x1 = _caption_column(caption_anchor, page_rect)
+
+    def in_column(box: tuple[float, ...]) -> bool:
+        return box[0] < col_x1 and box[2] > col_x0
+
+    below = [
+        a["bbox"]
+        for a in caption_anchors
+        if a["bbox"] != caption_anchor["bbox"] and a["bbox"][1] >= cap_y1 and in_column(a["bbox"])
+    ]
+    prose = [b for b in _find_paragraph_blocks(page) if b[1] >= cap_y1 and in_column(b)]
+    lower_bound = min([page_rect.y1, *(box[1] for box in below + prose)])
+    visuals = sorted(
+        (
+            r
+            for r in _page_visual_rects(page)
+            if r[1] >= cap_y1 - 2.0 and r[3] <= lower_bound + 2.0 and in_column(r)
+        ),
+        key=lambda r: r[1],
+    )
+    if not visuals or visuals[0][1] - cap_y1 > CAPTION_FIGURE_GAP_PT:
+        return None
+    x0, top, x1, bottom = visuals[0]
+    for rect in visuals[1:]:
+        if rect[1] > bottom + SIDE_FIGURE_PANEL_GAP_PT:
+            break
+        x0, x1, bottom = min(x0, rect[0]), max(x1, rect[2]), max(bottom, rect[3])
+    if any(box[1] >= bottom - 2.0 and box[1] - bottom <= CAPTION_FIGURE_GAP_PT for box in below):
+        return None
+
+    bbox = _grow_bbox_over_figure_labels(
+        page, (x0, top, x1, bottom), upper_bound=cap_y1, lower_bound=lower_bound
+    )
+    bbox = _clip_to_page(bbox, page_rect, padding=2.0)
+    bbox = (bbox[0], max(bbox[1], cap_y1 + 1.0), bbox[2], bbox[3])
+    if bbox[2] - bbox[0] < MIN_FIGURE_WIDTH_PT or bbox[3] - bbox[1] < MIN_VISUAL_FIGURE_HEIGHT_PT:
+        return None
+    return bbox
+
+
+def _estimate_figure_bbox_beside_caption(
+    page,
+    caption_anchor: dict,
+    caption_anchors: list[dict],
+    page_rect,
+) -> tuple[float, float, float, float] | None:
+    """Estimate the figure set in the column next to its caption.
+
+    Journals such as Nature can align a caption with a figure in the other
+    column. The caption then has no visual above it, and the figure has no
+    caption of its own.
+    """
+    cap_x0, cap_y0, cap_x1, cap_y1 = caption_anchor["bbox"]
+    rects = _page_visual_rects(page)
+    if any(r[3] <= cap_y0 + 5.0 and r[0] < cap_x1 and r[2] > cap_x0 for r in rects):
+        return None
+
+    best: tuple[float, float, float, float] | None = None
+    for x_range in ((page_rect.x0, cap_x0 + 2.0), (cap_x1 - 2.0, page_rect.x1)):
+        column = [r for r in rects if r[0] >= x_range[0] and r[2] <= x_range[1]]
+        candidate = _figure_bbox_in_column(page, column, x_range, caption_anchor, caption_anchors)
+        if candidate is not None and (best is None or _rect_area(candidate) > _rect_area(best)):
+            best = candidate
+    if best is None:
+        return None
+
+    bbox = _clip_to_page(best, page_rect, padding=2.0)
+    if bbox[2] - bbox[0] < MIN_FIGURE_WIDTH_PT or bbox[3] - bbox[1] < MIN_FIGURE_HEIGHT_PT:
+        return None
+    return bbox
+
+
+def _figure_bbox_in_column(
+    page,
+    column: list[tuple[float, float, float, float]],
+    x_range: tuple[float, float],
+    caption_anchor: dict,
+    caption_anchors: list[dict],
+) -> tuple[float, float, float, float] | None:
+    """Join the visuals aligned with a caption, stopping at prose and other captions."""
+    cap_y0, cap_y1 = caption_anchor["bbox"][1], caption_anchor["bbox"][3]
+    prose = [b for b in _find_paragraph_blocks(page) if b[0] >= x_range[0] and b[2] <= x_range[1]]
+    upper_bound = max((b[3] for b in prose if b[3] <= cap_y0), default=0.0)
+    lower_bound = min((b[1] for b in prose if b[1] >= cap_y0), default=page.rect.y1)
+    visuals = [r for r in column if r[1] >= upper_bound and r[3] <= lower_bound]
+
+    aligned = [r for r in visuals if r[1] < cap_y1 and r[3] > cap_y0]
+    if not aligned:
+        return None
+    top = min(r[1] for r in aligned)
+    bottom = max(r[3] for r in aligned)
+    for rect in sorted(visuals, key=lambda r: r[1]):
+        if rect[1] <= bottom + SIDE_FIGURE_PANEL_GAP_PT:
+            top = min(top, rect[1])
+            bottom = max(bottom, rect[3])
+
+    for anchor in caption_anchors:
+        if anchor is caption_anchor or anchor["bbox"] == caption_anchor["bbox"]:
+            continue
+        x0, y0, x1, y1 = anchor["bbox"]
+        in_column = x0 >= x_range[0] and x1 <= x_range[1]
+        if in_column and y0 <= bottom + SIDE_FIGURE_PANEL_GAP_PT and y1 >= top:
+            return None
+
+    used = [r for r in visuals if r[1] >= top and r[3] <= bottom]
+    return _grow_bbox_over_figure_labels(
+        page,
+        (min(r[0] for r in used), top, max(r[2] for r in used), bottom),
+        upper_bound=max(upper_bound, min(top, cap_y0) - 4.0),
+        lower_bound=lower_bound,
+        x_range=x_range,
+    )
+
+
+def _collect_text_lines(page) -> list[dict]:
+    """Return per-line records sorted top-to-bottom.
+
+    Each record::
+
+        {"bbox": (x0, y0, x1, y1), "text": str}
+    """
+    lines_out: list[dict] = []
+    blocks = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)["blocks"]
+    for block in blocks:
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            spans = line.get("spans", [])
+            if not spans:
+                continue
+            text = "".join(s.get("text", "") for s in spans).strip()
+            if not text:
+                continue
+            lines_out.append({"bbox": tuple(line["bbox"]), "text": text})
+    lines_out.sort(key=lambda r: r["bbox"][1])
+    return lines_out
+
+
+def _cluster_lines_into_rows(
+    lines: list[dict], *, y_tolerance: float = 2.0
+) -> list[dict]:
+    """Cluster sibling text lines that share roughly the same vertical band.
+
+    PDFs created by LaTeX often emit one PyMuPDF "line" per cell, so a single
+    visual row of a table is split into many independent line records.  We
+    merge lines whose ``y0`` falls within ``y_tolerance`` points of the row
+    seed so that downstream heuristics can reason about a true logical row.
+
+    Each output record::
+
+        {
+            "bbox": (x0, y0, x1, y1),  # union of all member bboxes
+            "tokens": [str, ...],       # text content of each member, left-to-right
+            "text": str,                # tokens joined by single spaces
+            "members": [dict, ...],     # original line records inside the row
+        }
+    """
+    rows: list[dict] = []
+    sorted_lines = sorted(lines, key=lambda r: (r["bbox"][1], r["bbox"][0]))
+    for line in sorted_lines:
+        bx0, by0, bx1, by1 = line["bbox"]
+        placed = False
+        for row in rows:
+            rx0, ry0, rx1, ry1 = row["bbox"]
+            row_mid = (ry0 + ry1) / 2.0
+            line_mid = (by0 + by1) / 2.0
+            if abs(line_mid - row_mid) <= y_tolerance:
+                row["bbox"] = (
+                    min(rx0, bx0),
+                    min(ry0, by0),
+                    max(rx1, bx1),
+                    max(ry1, by1),
+                )
+                row["members"].append(line)
+                placed = True
+                break
+        if not placed:
+            rows.append({
+                "bbox": (bx0, by0, bx1, by1),
+                "members": [line],
+            })
+
+    for row in rows:
+        row["members"].sort(key=lambda m: m["bbox"][0])
+        row["tokens"] = [m["text"] for m in row["members"]]
+        row["text"] = " ".join(row["tokens"])
+    rows.sort(key=lambda r: r["bbox"][1])
+    return rows
+
+
+def _row_is_table_like(row: dict) -> bool:
+    """A logical row that looks like part of a data table.
+
+    The row qualifies if it has many short tokens (typical for tabular cells).
+    Either:
+    - many independent cells (≥ 3 separate line members), or
+    - a single text whose tokens look like numeric or textual table body cells.
+    """
+    members = row.get("members", [])
+    text = row.get("text", "")
+    if len(members) >= 3:
+        # Many separated cells: the typical case for LaTeX-rendered tables
+        # where every cell becomes its own PyMuPDF line.
+        return True
+    return looks_like_data_row(text) or _looks_like_text_table_row(text)
+
+
+def _restrict_row_to_caption_column(row: dict, caption_bbox: tuple[float, float, float, float], page_rect) -> dict | None:
+    """Keep only row cells in the same page column as a narrow caption.
+
+    In two-column papers, unrelated left/right column tables often share the
+    same y bands. Row clustering can merge them unless we trim by caption side.
+    """
+    members = list(row.get("members", []) or [])
+    if not members:
+        return row
+
+    page_x0 = float(getattr(page_rect, "x0", 0.0))
+    page_x1 = float(getattr(page_rect, "x1", 0.0))
+    page_width = max(1.0, page_x1 - page_x0)
+    page_mid = (page_x0 + page_x1) / 2.0
+    cx0, _, cx1, _ = caption_bbox
+    caption_width = cx1 - cx0
+    if caption_width >= page_width * 0.45:
+        return row
+
+    caption_mid = (cx0 + cx1) / 2.0
+    caption_is_left = caption_mid < page_mid
+    expanded_caption_x0 = cx0 - 24.0
+    expanded_caption_x1 = cx1 + 24.0
+
+    def overlaps_caption_band(x0: float, x1: float) -> bool:
+        overlap = max(0.0, min(x1, expanded_caption_x1) - max(x0, expanded_caption_x0))
+        width = max(1.0, x1 - x0)
+        return overlap >= min(16.0, width * 0.25)
+
+    rx0, _, rx1, _ = row["bbox"]
+    row_mid = (rx0 + rx1) / 2.0
+    row_same_side = (row_mid < page_mid) == caption_is_left
+    row_overlaps_caption_band = overlaps_caption_band(rx0, rx1)
+    if not (rx0 < page_mid - 10.0 and rx1 > page_mid + 10.0):
+        return row if row_same_side or row_overlaps_caption_band else None
+
+    filtered = []
+    for member in members:
+        mx0, _, mx1, _ = member["bbox"]
+        member_mid = (mx0 + mx1) / 2.0
+        same_side = (member_mid < page_mid) == caption_is_left
+        if same_side or overlaps_caption_band(mx0, mx1):
+            filtered.append(member)
+
+    if not filtered:
+        return None
+    if len(filtered) == len(members):
+        return row
+
+    x0 = min(member["bbox"][0] for member in filtered)
+    y0 = min(member["bbox"][1] for member in filtered)
+    x1 = max(member["bbox"][2] for member in filtered)
+    y1 = max(member["bbox"][3] for member in filtered)
+    tokens = [member["text"] for member in sorted(filtered, key=lambda m: m["bbox"][0])]
+    return {
+        "bbox": (x0, y0, x1, y1),
+        "members": sorted(filtered, key=lambda m: m["bbox"][0]),
+        "tokens": tokens,
+        "text": " ".join(tokens),
+    }
+
+
+def _line_is_inside_any_block(
+    line_bbox: tuple[float, float, float, float],
+    blocks: list[tuple[float, float, float, float, str]],
+) -> bool:
+    for bb in blocks:
+        if (
+            line_bbox[0] >= bb[0] - 0.5
+            and line_bbox[1] >= bb[1] - 0.5
+            and line_bbox[2] <= bb[2] + 0.5
+            and line_bbox[3] <= bb[3] + 0.5
+        ):
+            return True
+    return False
+
+
+def _grow_table_region(
+    page,
+    caption_anchor: dict,
+    rows: list[dict],
+    paragraph_blocks: list[tuple[float, float, float, float, str]],
+    *,
+    direction: str,
+    upper_bound: float,
+    lower_bound: float,
+) -> tuple[list[tuple[float, float, float, float]], int]:
+    """Walk away from the caption in ``direction`` ('up' or 'down') and collect
+    logical rows that look like part of a tabular layout.
+
+    Returns the list of accepted row bboxes (caption excluded) and the number
+    of rows confirmed as table body rows.  The caller decides which direction
+    wins.
+    """
+    caption_y0 = caption_anchor["bbox"][1]
+    caption_y1 = caption_anchor["bbox"][3]
+
+    accepted: list[tuple[float, float, float, float]] = []
+    data_row_count = 0
+    consecutive_non_data = 0
+    seen_data = False
+    last_accepted_edge = caption_y1 if direction == "down" else caption_y0
+
+    if direction == "down":
+        candidates = [r for r in rows if r["bbox"][1] > caption_y1 + 0.5]
+        candidates.sort(key=lambda r: r["bbox"][1])
+        boundary_check = lambda ly0, ly1: ly1 >= lower_bound
+    else:
+        candidates = [r for r in rows if r["bbox"][3] < caption_y0 - 0.5]
+        candidates.sort(key=lambda r: r["bbox"][3], reverse=True)
+        boundary_check = lambda ly0, ly1: ly0 <= upper_bound
+
+    for row in candidates:
+        restricted_row = _restrict_row_to_caption_column(row, caption_anchor["bbox"], page.rect)
+        if restricted_row is None:
+            continue
+        row = restricted_row
+        rx0, ry0, rx1, ry1 = row["bbox"]
+        if boundary_check(ry0, ry1):
+            break
+        text = row["text"]
+        is_table_row = _row_is_table_like(row)
+        in_paragraph_block = _line_is_inside_any_block(row["bbox"], paragraph_blocks)
+        row_gap = ry0 - last_accepted_edge if direction == "down" else last_accepted_edge - ry1
+        row_height = max(ry1 - ry0, 1.0)
+        if seen_data and row_gap > max(12.0, row_height * 1.8) and not is_table_row:
+            break
+        if (
+            seen_data
+            and len(row.get("members", []) or []) <= 1
+            and in_paragraph_block
+            and not looks_like_data_row(text)
+        ):
+            break
+        # If this row sits entirely inside a real prose paragraph and does not
+        # look table-shaped, we have walked out of the table.
+        if not is_table_row and (in_paragraph_block or len(text) > 200):
+            break
+        if is_table_row:
+            consecutive_non_data = 0
+            data_row_count += 1
+            seen_data = True
+        else:
+            consecutive_non_data += 1
+            # Header / footnote rows are allowed but we should not collect an
+            # unbounded run of them when no real data has been seen yet.
+            if consecutive_non_data > 4 and not seen_data:
+                break
+            if consecutive_non_data > 8:
+                break
+        accepted.append(row["bbox"])
+        last_accepted_edge = ry1 if direction == "down" else ry0
+
+    return accepted, data_row_count
+
+
+def _rect_belongs_to_table(
+    rect: tuple[float, float, float, float],
+    rect_y_mid: float,
+    table: tuple[float, float, float, float],
+) -> bool:
+    x0, y0, x1, y1 = table
+    return (
+        y0 - 4.0 <= rect_y_mid <= y1 + 4.0
+        and rect[1] >= y0 - 12.0
+        and rect[3] <= y1 + 12.0
+        and rect[2] >= x0 - 12.0
+        and rect[0] <= x1 + 12.0
+    )
+
+
+def _finalize_table_bbox(
+    page,
+    caption_anchor: dict,
+    extra_rects: list[tuple[float, float, float, float]],
+    page_rect,
+    *,
+    direction: str,
+) -> tuple[float, float, float, float] | None:
+    if not extra_rects:
+        return None
+    _, caption_y0, _, caption_y1 = caption_anchor["bbox"]
+    accepted: list[tuple[float, float, float, float]] = list(extra_rects)
+
+    y0 = min(b[1] for b in accepted)
+    y1 = max(b[3] for b in accepted)
+    initial_x0 = min(b[0] for b in accepted)
+    initial_x1 = max(b[2] for b in accepted)
+    for r in _collect_drawing_rects(page):
+        ry_mid = (r[1] + r[3]) / 2.0
+        if _rect_belongs_to_table(r, ry_mid, (initial_x0, y0, initial_x1, y1)):
+            accepted.append(r)
+    for r in _collect_xref_rects(page):
+        ry_mid = (r[1] + r[3]) / 2.0
+        if _rect_belongs_to_table(r, ry_mid, (initial_x0, y0, initial_x1, y1)):
+            accepted.append(r)
+
+    x0 = min(b[0] for b in accepted)
+    y0 = min(b[1] for b in accepted)
+    x1 = max(b[2] for b in accepted)
+    y1 = max(b[3] for b in accepted)
+
+    bbox = _clip_to_page((x0, y0, x1, y1), page_rect, padding=6.0)
+    if direction == "down":
+        bbox = (bbox[0], max(bbox[1], caption_y1 + 1.0), bbox[2], bbox[3])
+    else:
+        bbox = (bbox[0], bbox[1], bbox[2], min(bbox[3], caption_y0 - 1.0))
+    width = bbox[2] - bbox[0]
+    height = bbox[3] - bbox[1]
+    if width < MIN_FIGURE_WIDTH_PT or height < MIN_TABLE_HEIGHT_PT:
+        return None
+    return bbox
+
+
+def _estimate_table_bbox(
+    page,
+    caption_anchor: dict,
+    prev_anchor: dict | None,
+    next_anchor: dict | None,
+    page_rect,
+) -> tuple[float, float, float, float] | None:
+    result = _estimate_table_bbox_with_rows(page, caption_anchor, prev_anchor, next_anchor, page_rect)
+    return result[0] if result is not None else None
+
+
+def _page_keeps_table_captions_below(
+    page,
+    caption_anchor: dict,
+    page_anchors: list[dict],
+    rows: list[dict],
+    paragraph_blocks: list[tuple[float, float, float, float, str]],
+    page_rect,
+) -> bool:
+    """Tell whether the page's last table has its body above its caption.
+
+    A page sets its tables one way, so its last caption shows which side the
+    bodies between captions belong to.
+    """
+    later = [
+        anchor
+        for anchor in page_anchors
+        if anchor["kind"] == "table"
+        and anchor["bbox"][1] > caption_anchor["bbox"][3]
+        and _captions_share_column(anchor, caption_anchor)
+    ]
+    if not later:
+        return False
+    last = later[-1]
+    # Only the rows between the last caption and the caption before it can
+    # be its body; earlier tables' rows would outvote the side below it.
+    ceiling = max(
+        [caption_anchor["bbox"][3]]
+        + [
+            anchor["bbox"][3]
+            for anchor in page_anchors
+            if anchor["bbox"][3] < last["bbox"][1] and _captions_share_column(anchor, last)
+        ]
+    )
+    _, rows_below = _grow_table_region(
+        page,
+        last,
+        rows,
+        paragraph_blocks,
+        direction="down",
+        upper_bound=last["bbox"][3],
+        lower_bound=page_rect.y1,
+    )
+    _, rows_above = _grow_table_region(
+        page,
+        last,
+        rows,
+        paragraph_blocks,
+        direction="up",
+        upper_bound=ceiling,
+        lower_bound=last["bbox"][1],
+    )
+    return rows_below == 0 or rows_below < rows_above
+
+
+def _page_keeps_table_captions_above(
+    page,
+    caption_anchor: dict,
+    page_anchors: list[dict],
+    rows: list[dict],
+    paragraph_blocks: list[tuple[float, float, float, float, str]],
+    page_rect,
+) -> bool:
+    """Tell whether the page's first table has nothing over its caption."""
+    earlier = [
+        anchor
+        for anchor in page_anchors
+        if anchor["kind"] == "table"
+        and anchor["bbox"][3] < caption_anchor["bbox"][1]
+        and _captions_share_column(anchor, caption_anchor)
+    ]
+    if not earlier:
+        return False
+    first = earlier[0]
+    _, rows_above = _grow_table_region(
+        page,
+        first,
+        rows,
+        paragraph_blocks,
+        direction="up",
+        upper_bound=page_rect.y0,
+        lower_bound=first["bbox"][1],
+    )
+    return rows_above == 0
+
+
+def _estimate_table_bbox_with_rows(
+    page,
+    caption_anchor: dict,
+    prev_anchor: dict | None,
+    next_anchor: dict | None,
+    page_rect,
+    page_anchors: list[dict] | None = None,
+) -> tuple[tuple[float, float, float, float], int] | None:
+    r"""Estimate the bounding box of a table.
+
+    Tables in academic papers come in two layouts:
+
+    - caption-on-top: ``\caption`` precedes ``\begin{tabular}``;
+    - caption-on-bottom: tabular body precedes ``\caption``.
+
+    LaTeX makes both common, and within a single paper both forms can mix
+    (e.g. wide tables placed with ``[t]`` vs. ``[b]``).  We therefore probe
+    both directions and pick the side with strictly more confirmed table body
+    rows.  Ties go to the downward side, matching the most common ACM / IEEE
+    template defaults.
+
+    Tables are usually pure text + thin separator lines, so the page rendering
+    of just the union of text-line bboxes is sufficient.  We additionally
+    union any drawing rects (``\hline``, frames) and image rects that fall in
+    the same y-range, in case the paper places company-logo plots inside a
+    table cell.
+    """
+    caption_y1 = caption_anchor["bbox"][3]
+
+    upper_bound = max(page_rect.y0, _repeated_running_header_bottom(page) + 1.0)
+    if prev_anchor is not None:
+        upper_bound = max(upper_bound, prev_anchor["bbox"][3] + 2.0)
+
+    lower_bound = page_rect.y1
+    if next_anchor is not None:
+        lower_bound = max(caption_y1 + 1.0, next_anchor["bbox"][1] - 2.0)
+        if next_anchor["kind"] == "figure":
+            # Tick labels of the figure below read like table rows.
+            visuals = _visuals_above_caption(page, next_anchor, caption_anchor, page_anchors or [])
+            if visuals:
+                lower_bound = max(caption_y1 + 1.0, min(rect[1] for rect in visuals) - 2.0)
+
+    text_lines = _collect_text_lines(page)
+    rows = _cluster_lines_into_rows(text_lines)
+    paragraph_blocks = _find_paragraph_blocks(page, exclude_cell_blocks=True)
+
+    down_lines, down_data = _grow_table_region(
+        page,
+        caption_anchor,
+        rows,
+        paragraph_blocks,
+        direction="down",
+        upper_bound=upper_bound,
+        lower_bound=lower_bound,
+    )
+    up_lines, up_data = _grow_table_region(
+        page,
+        caption_anchor,
+        rows,
+        paragraph_blocks,
+        direction="up",
+        upper_bound=upper_bound,
+        lower_bound=lower_bound,
+    )
+
+    if down_data == 0 and up_data == 0:
+        return None
+
+    captions_below = down_data >= up_data > 0 and _page_keeps_table_captions_below(
+        page, caption_anchor, page_anchors or [], rows, paragraph_blocks, page_rect
+    )
+
+    captions_above = up_data > down_data > 0 and _page_keeps_table_captions_above(
+        page, caption_anchor, page_anchors or [], rows, paragraph_blocks, page_rect
+    )
+
+    chosen: list[tuple[float, float, float, float]]
+    chosen_data_rows: int
+    if (up_data > down_data and not captions_above) or captions_below:
+        chosen = up_lines
+        chosen_data_rows = up_data
+        direction = "up"
+    else:
+        chosen = down_lines
+        chosen_data_rows = down_data
+        direction = "down"
+
+    bbox = _finalize_table_bbox(
+        page,
+        caption_anchor,
+        chosen,
+        page_rect,
+        direction=direction,
+    )
+    if bbox is None:
+        return None
+    return bbox, chosen_data_rows
+
+
+def _render_crop(page, bbox: tuple[float, float, float, float], dpi: int) -> bytes:
+    """Render a page region to PNG bytes at the given DPI."""
+    clip = fitz.Rect(*bbox)
+    scale = dpi / 72.0
+    matrix = fitz.Matrix(scale, scale)
+    pix = page.get_pixmap(matrix=matrix, clip=clip, alpha=False)
+    return pix.tobytes("png")
+
+
+def _render_grid_preview(page, dpi: int) -> bytes:
+    """Render a whole page with a 10% grid, so a page-normalized bbox can be read off it."""
+    pixmap = page.get_pixmap(matrix=fitz.Matrix(dpi / 72.0, dpi / 72.0), alpha=False)
+    canvas = fitz.open()
+    try:
+        sheet = canvas.new_page(width=pixmap.width, height=pixmap.height)
+        sheet.insert_image(sheet.rect, pixmap=pixmap)
+        for step in range(1, 10):
+            x = sheet.rect.width * step / 10
+            y = sheet.rect.height * step / 10
+            sheet.draw_line((x, 0), (x, sheet.rect.height), **GRID_LINE_STYLE)
+            sheet.draw_line((0, y), (sheet.rect.width, y), **GRID_LINE_STYLE)
+            label = f"0.{step}"
+            sheet.insert_text((x + 2, 10), label, fontsize=9, color=GRID_COLOR)
+            sheet.insert_text((2, y - 2), label, fontsize=9, color=GRID_COLOR)
+        return sheet.get_pixmap(alpha=False).tobytes("png")
+    finally:
+        canvas.close()
+
+
+def _unique_figure_asset_filename(page_number: int, label: str, used_filenames: set[str]) -> str:
+    safe_label = re.sub(r"[^a-zA-Z0-9]+", "_", label.lower()).strip("_") or "unlabeled"
+    base = f"page_{page_number:03d}_fig_{safe_label}.png"
+    if base not in used_filenames:
+        used_filenames.add(base)
+        return base
+
+    stem = base.removesuffix(".png")
+    suffix = 2
+    while True:
+        candidate = f"{stem}_{suffix}.png"
+        if candidate not in used_filenames:
+            used_filenames.add(candidate)
+            return candidate
+        suffix += 1
+
+
+def _table_number(label: str) -> str:
+    match = re.search(r"(\d+[a-z]?)$", unicodedata.normalize("NFKC", label), re.IGNORECASE)
+    return match.group(1) if match else ""
+
+
+def _bilingual_table_twin(anchor: dict, neighbor: dict | None) -> bool:
+    """Tell whether ``neighbor`` is the same table's caption in the other language.
+
+    Chinese papers often stack a 表 caption and its English translation.
+    """
+    if neighbor is None or anchor.get("kind") != "table" or neighbor.get("kind") != "table":
+        return False
+    labels = (anchor["label"].lstrip(), neighbor["label"].lstrip())
+    if labels[0].startswith("表") == labels[1].startswith("表"):
+        return False
+    number = _table_number(labels[0])
+    if not number or number != _table_number(labels[1]):
+        return False
+    upper, lower = sorted((anchor["bbox"], neighbor["bbox"]), key=lambda bbox: bbox[1])
+    line_height = max(upper[3] - upper[1], lower[3] - lower[1], 6.0)
+    return lower[1] - upper[3] <= min(line_height, 12.0)
+
+
+def _table_caption_block(
+    anchor: dict, column_anchors: list[dict], idx: int
+) -> tuple[dict, dict | None, dict | None]:
+    """Return the caption block and its neighbors, joining a bilingual twin caption.
+
+    Without the join, each twin is the other's neighbor, which hides the table
+    from the caption on its side.
+    """
+    prev_anchor = column_anchors[idx - 1] if idx > 0 else None
+    next_anchor = column_anchors[idx + 1] if idx + 1 < len(column_anchors) else None
+    for twin, other in ((prev_anchor, idx - 2), (next_anchor, idx + 2)):
+        if not _bilingual_table_twin(anchor, twin):
+            continue
+        boxes = (anchor["bbox"], twin["bbox"])
+        block = {
+            **anchor,
+            "bbox": (
+                min(box[0] for box in boxes),
+                min(box[1] for box in boxes),
+                max(box[2] for box in boxes),
+                max(box[3] for box in boxes),
+            ),
+        }
+        beyond = column_anchors[other] if 0 <= other < len(column_anchors) else None
+        if twin is prev_anchor:
+            return block, beyond, next_anchor
+        return block, prev_anchor, beyond
+    return anchor, prev_anchor, next_anchor
+
+
+def extract_figure_regions(
+    page, page_number: int, images_dir: Path, anchors: list[dict], *, dpi: int = FIGURE_RENDER_DPI
+) -> list[dict]:
+    """Crop the visual region belonging to each selected caption anchor."""
+    if fitz is None:
+        return []
+
+    if not anchors:
+        return []
+
+    page_rect = page.rect
+    assets: list[dict] = []
+    used_filenames: set[str] = set()
+
+    for idx, anchor in enumerate(anchors):
+        prev_anchor = next(
+            (other for other in reversed(anchors[:idx]) if _captions_share_column(other, anchor)),
+            None,
+        )
+        next_anchor = next(
+            (other for other in anchors[idx + 1 :] if _captions_share_column(other, anchor)),
+            None,
+        )
+        kind = anchor.get("kind", "figure")
+
+        bbox: tuple[float, float, float, float] | None
+        table_body_rows = 0
+        if kind == "table":
+            column_anchors = [
+                other
+                for other in anchors
+                if other is anchor or _captions_share_column(other, anchor)
+            ]
+            caption_block, table_prev, table_next = _table_caption_block(
+                anchor,
+                column_anchors,
+                next(index for index, other in enumerate(column_anchors) if other is anchor),
+            )
+            table_result = _estimate_table_bbox_with_rows(
+                page, caption_block, table_prev, table_next, page_rect, anchors
+            )
+            if table_result is not None:
+                bbox, table_body_rows = table_result
+            else:
+                bbox = None
+            if bbox is None:
+                # Fall back to the figure-shape estimator in case the table is
+                # actually rendered as an embedded image.
+                bbox = _estimate_figure_bbox_above_caption(
+                    page, caption_block, table_prev, page_rect, anchors
+                )
+        else:
+            bbox = _estimate_figure_bbox_beside_caption(page, anchor, anchors, page_rect)
+            if bbox is None and not _visuals_above_caption(page, anchor, prev_anchor, anchors):
+                bbox = _estimate_figure_bbox_below_caption(page, anchor, anchors, page_rect)
+            if bbox is None:
+                bbox = _estimate_figure_bbox_above_caption(
+                    page, anchor, prev_anchor, page_rect, anchors
+                )
+            if bbox is None:
+                bbox = _estimate_table_bbox(page, anchor, prev_anchor, next_anchor, page_rect)
+
+        if bbox is None:
+            continue
+
+        label = anchor["label"]
+        filename = _unique_figure_asset_filename(page_number, label, used_filenames)
+        output_path = images_dir / filename
+
+        try:
+            png_bytes = _render_crop(page, bbox, dpi)
+        except Exception:
+            continue
+
+        save_image_bytes(output_path, png_bytes)
+
+        width_px = int((bbox[2] - bbox[0]) * dpi / 72.0)
+        height_px = int((bbox[3] - bbox[1]) * dpi / 72.0)
+        quality_signals = _quality_signals_for_crop(
+            page,
+            kind,
+            bbox,
+            anchor,
+            page_rect,
+            table_body_rows=table_body_rows,
+            caption_anchors=anchors,
+        )
+
+        assets.append(
+            {
+                "page_number": page_number,
+                "label": label,
+                "kind": kind,
+                "caption_text": normalize_whitespace(anchor["line_text"]),
+                "filename": filename,
+                "path": str(output_path),
+                "ext": "png",
+                "width": width_px,
+                "height": height_px,
+                "bbox_pt": list(bbox),
+                "size_bytes": len(png_bytes),
+                "extraction_level": "figure",
+                "quality_signals": quality_signals,
+            }
+        )
+
+    return assets
+
+
+def main() -> None:
+    args = parser().parse_args()
+    record = ensure_record(args.input)
+    pdf_path = Path(str(record.get("pdf_path", "")).strip()).expanduser()
+    if not pdf_path.exists():
+        from_fetch = maybe_load_json_record(args.input) or {}
+        pdf_candidate = str(from_fetch.get("pdf_path", "")).strip()
+        if pdf_candidate:
+            pdf_path = Path(pdf_candidate).expanduser()
+    if not pdf_path.exists():
+        raise SystemExit("extract_pdf_assets.py requires a resolvable local PDF path.")
+    if fitz is None:
+        raise SystemExit("extract_pdf_assets.py requires PyMuPDF (`fitz`).")
+
+    asset_root = Path(args.assets_dir).expanduser().resolve() if args.assets_dir else default_assets_dir(record)
+    images_dir = asset_root / "images"
+    previews_dir = asset_root / "page_previews"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    figure_dpi = args.figure_dpi
+
+    doc = fitz.open(pdf_path.resolve())
+    page_records: list[dict] = []
+    figure_assets: list[dict] = []
+    asset_coverage: dict = {}
+    try:
+        total_pages = len(doc)
+        page_limit = min(total_pages, args.max_pages)
+        caption_anchors = select_caption_blocks(doc)
+        asset_coverage = {
+            "total_pages": total_pages,
+            "asset_max_pages": args.max_pages,
+            "asset_pages_scanned": page_limit,
+            "truncated_due_to_asset_page_limit": total_pages > args.max_pages,
+        }
+        for idx in range(page_limit):
+            page = doc[idx]
+            page_number = idx + 1
+            text = normalize_whitespace(page.get_text("text"))
+            searchable_chars = len(text)
+            extraction_method = "text" if searchable_chars >= args.min_searchable_chars else "none"
+            ocr_text = ""
+            if extraction_method == "none":
+                ocr_text = ocr_page(page, args.ocr_dpi)
+                if ocr_text:
+                    extraction_method = "ocr"
+            image_count = count_page_images(page)
+
+            page_figures = extract_figure_regions(
+                page, page_number, images_dir, caption_anchors[page_number], dpi=figure_dpi
+            )
+            preview_path = previews_dir / f"page_{page_number:03d}.png"
+            save_image_bytes(preview_path, _render_grid_preview(page, PAGE_PREVIEW_DPI))
+            page_preview_path = str(preview_path)
+            for figure in page_figures:
+                figure["page_preview_path"] = page_preview_path
+            figure_assets.extend(page_figures)
+
+            page_records.append(
+                {
+                    "page_number": page_number,
+                    "searchable_text_chars": searchable_chars,
+                    "text_extraction_method": extraction_method,
+                    "ocr_used": extraction_method == "ocr",
+                    "image_count": image_count,
+                    "figure_count": len(page_figures),
+                    "page_preview_path": page_preview_path,
+                    "page_text": text or ocr_text,
+                    "text_preview": (text or ocr_text)[:240],
+                }
+            )
+    finally:
+        doc.close()
+
+    payload = {
+        "status": "ok",
+        "script": "extract_pdf_assets.py",
+        "paper_id": record.get("paper_id", ""),
+        "pdf_path": str(pdf_path.resolve()),
+        "asset_root": str(asset_root),
+        "images_dir": str(images_dir),
+        "page_assets": page_records,
+        "figure_assets": figure_assets,
+        "asset_coverage": asset_coverage,
+        "ocr_available": bool(load_pytesseract() and Image),
+    }
+    emit(payload, args.output)
+
+
+if __name__ == "__main__":
+    main()

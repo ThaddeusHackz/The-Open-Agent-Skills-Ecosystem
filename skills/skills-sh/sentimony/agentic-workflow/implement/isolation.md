@@ -1,0 +1,49 @@
+# Isolation
+
+Isolation keeps task work apart from changes that are not part of the plan. Pick the
+lightest option that gives that separation.
+
+## Detect what already exists
+
+Before creating anything, check where the session already is:
+
+- `git rev-parse --show-toplevel` - the root of the current working tree;
+- `git rev-parse --git-dir` and `git rev-parse --git-common-dir` - when they differ, the
+  session already runs inside a linked worktree;
+- `git worktree list` - worktrees that already exist for this repository, including one
+  for this branch;
+- the harness - a sandbox or an isolated workspace the agent runtime already provides.
+
+Existing isolation is used as it is. Do not stack a new worktree on top of one.
+
+## Order of preference
+
+1. **Work in place.** A full option, chosen whenever the branch is right and the
+   uncommitted changes (if any) are unrelated and can be kept out of task commits by
+   committing with explicit paths, through a temporary index when someone else's content
+   is already staged.
+2. **The harness mechanism.** When the runtime offers its own isolated workspace, use it
+   instead of managing worktrees by hand.
+3. **A Git worktree.** When the work must not share a working tree with other changes or
+   other sessions: `git worktree add -b <branch> <path> <base>`, placed where the
+   project's instructions say. Record its path as `Root` in the journal. The plan and
+   spec stay authoritative in the controller's checkout, and only the controller writes
+   the journal, there. Tasks get absolute paths to that copy; an uncommitted plan is not
+   copied into the worktree, and a committed copy inside it is neither read nor edited.
+
+Parallel subagents each need a separate worktree on their own branch from the
+controller's branch (`git worktree add -b <branch> <path> <controller branch>`); the rule is
+in the skill's Parallel tasks section. The controller integrates their commits locally,
+by cherry-pick or merge into its own branch, and never pushes or forces for it.
+
+## Limits
+
+A worktree separates files only. Ports, databases, caches outside the tree, and external
+services are still shared; tasks that touch them are not independent just because they run
+in different worktrees.
+
+## Never
+
+Never reset, stash, clean, or check out over changes that someone else left in the tree
+or staged in the index. Name them in `Initial dirty state` and work around them. Removing
+a worktree after the change is integrated belongs to `finalize`, not to this skill.

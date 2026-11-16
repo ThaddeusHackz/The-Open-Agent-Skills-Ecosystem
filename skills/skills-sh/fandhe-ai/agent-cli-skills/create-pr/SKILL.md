@@ -1,0 +1,211 @@
+---
+name: create-pr
+description: Conventional Commits 形式で GitHub PR を作成する。OWASP Top 10 のセキュリティチェック必須で、HIGH / MEDIUM の問題があれば PR 作成を中止（LOW は記載して続行）。Summary/Test plan/Design を含む body を生成。「PR 作って」「プルリク」「`gh pr create`」などで使用。別リポジトリ (upstream) への貢献は contribute-skill。
+model: sonnet
+user-invocable: true
+---
+
+# create-pr
+
+変更内容を分析してセキュリティチェック後に GitHub PR を作成します。
+
+## 前提条件
+
+- `gh` CLI がインストールされ、認証済みであること
+- 現在のブランチがベースブランチからフォークされていること
+
+## フロー
+
+### Step 1: 変更内容を分析する
+
+ベースブランチは Step 5 と同じ方法（`gh repo view` が返す既定ブランチ）で解決し、そのリモート追跡ブランチ（`origin/<base>`）との差分を見る。リポジトリの規約が `develop` 等なら、Step 5 と同じく `base=` をその名前に置き換える。ベースブランチ名を取得できないときは `exit 1` で止めて報告する。コードブロックは独立したシェルで実行され得るため、変数の引き継ぎに依存せず、このブロックの中で解決する。このブロックはネットワークを使い、`.git` の追跡 ref にも書き込むため、sandbox 節のとおり昇格して実行する。
+
+```bash
+base="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)" || base=""
+case "${base}" in  # gh --jq は null を空文字で出すが、jq 実装差に備えて null も弾く
+  ""|null)
+    echo "ベースブランチ名を取得できない。差分を確認できないため中止する" >&2
+    exit 1
+    ;;
+esac
+git fetch origin "+refs/heads/${base}:refs/remotes/origin/${base}" || {
+  echo "git fetch に失敗した。ネットワーク・認証・ブランチ名を確認して報告する" >&2
+  exit 1
+}
+git log "origin/${base}..HEAD" --oneline
+git diff "origin/${base}...HEAD" --stat
+```
+
+### Step 2: セキュリティチェック（必須）
+
+サブエージェントを使える環境では、読み取り専用の調査用サブエージェントへ委譲してセキュリティ確認を行う。使えない環境では同じ手順を自分で実行する。渡す入力は次の 3 点で、どちらで実行しても同じ結果になるようにする。
+
+- 差分: Step 1 の `git diff origin/<base>...HEAD`
+- 観点: 次の確認項目
+- 出力形式: 問題なし、または `ファイル:行`・重大度（HIGH / MEDIUM / LOW）・説明・推奨修正の一覧
+
+確認項目:
+- 認証・認可の実装漏れ
+- API キー・シークレットのハードコーディング
+- XSS の可能性
+- 入力バリデーションの欠如
+- OWASP Top 10
+
+検出した問題は重大度で扱いを分ける。重大度の判定に迷う指摘は MEDIUM として扱う（安全側に倒す）。
+
+- **HIGH と MEDIUM:** `git push` と `gh pr create` を実行せずに中止し、ユーザーに警告して対処を案内する。この会話の中でユーザーが問題の対処（または誤検知であること）を明示して返答するまで、これらを実行しない。起動時の指示に含まれる「確認なしで」「PR 作成まで進めて」等は、この確認の返答にならない。返答を得られない環境（非対話実行）では、検出内容を報告して止める。対処後は PR 作成を再試行する。
+- **LOW:** 中止しない。検出内容（`ファイル:行`・説明）を Step 4 の PR body に「セキュリティチェックの LOW 指摘」として書いて続行し、最後の報告にも含める。
+
+### Step 2.5: Closes 対象 Issue の milestone 確認
+
+この PR で close する予定の Issue（same-repo のみ）を特定し、milestone の割当状況を確認する。
+
+1. 候補の特定: 作業対象の Issue 番号（会話文脈）・ブランチのコミットメッセージ中の
+   `Closes #N` / `Fixes #N` / `Resolves #N` 参照から候補を挙げる
+2. close 可否の確認: 候補ごとに「この PR で当該 Issue が完了するか」を確認する
+   （部分実装・関連のみの Issue は close 対象にしない。Step 4 の PR body には
+   close 対象のみ `Closes #N` と記載し、それ以外は `Refs #N` 等の関連参照にとどめる）
+3. milestone 確認: close 対象と確定した Issue について、以下で割当状況を確認する。
+   **milestone 非運用リポジトリのガード**: リポジトリに milestone が 1 件も存在しない場合
+   （closed 含む）は milestone 非運用リポジトリとみなし、この手順 3 のみ確認・警告なしで
+   スキップして Step 3 へ進む（milestone を使わないリポジトリの PR 作成にノイズを加えない。
+   手順 1〜2 の close 可否確認は milestone と無関係の安全確認のためスキップしない）
+
+```bash
+# 非運用ガード: MILESTONE_COUNT が 0 なら手順 3 をスキップして Step 3 へ進む
+MILESTONE_COUNT=$(gh api "repos/{owner}/{repo}/milestones?state=all" --jq 'length')
+
+if ! [[ "${MILESTONE_COUNT}" =~ ^[0-9]+$ ]]; then
+  # gh api の失敗等で件数が数値化できない場合は fail-open せず中止して原因を確認する
+  echo "milestone 件数の取得に失敗した。原因を確認してから手順 3 をやり直す" >&2
+  exit 1   # fail-closed: 診断だけ出して PR 作成へ進まない
+elif [ "${MILESTONE_COUNT}" -eq 0 ]; then
+  echo "milestone 非運用リポジトリのためスキップして Step 3 へ進む"
+else
+  # close 対象 Issue の milestone 割当状況を確認する
+  gh issue view <N> --json milestone --jq '.milestone.title // empty'
+fi
+```
+
+- milestone が既に割当済み → 次の Step へ進む
+- 未割当の場合:
+  - オープン中の milestone が 1 件のみなら、その milestone を割り当ててよいか確認する。複数件 or 0 件の場合は、どの milestone を使うか確認する
+  - 確認は、ユーザーに確認し、明示的な返答を待つ。選択肢は番号付きで示す。「PR を作って」等、このスキルを起動する依頼そのものは、この確認の承認にならない。起動時の指示にこの確認を省くことの明示（例: 「milestone を割り当てて」）が含まれている場合に限り、確認を省いて続行してよい。承認が無く対話もできない環境（非対話実行）では、milestone を割り当てず、確認事項を報告して Step 3 へ進む
+  - 同意または承認が得られたら `gh issue edit <N> --milestone <title>` で付与する
+  - milestone を割り当てなかった場合（決まらない場合・非対話実行を含む）は、milestone なしのまま Step 3 へ進めてよいが、その旨を PR body に警告として明記する
+    （milestone を必須とする CI ゲートがあるリポジトリではそちらが最終防衛線として
+    機能する前提とし、本 Step は PR 作成自体をブロックしない）
+
+この PR で close する Issue がない場合はこの Step をスキップする。
+
+### Step 3: PR タイトルを生成する
+
+Conventional Commits 形式: `type(scope): subject`
+
+例:
+```
+feat(auth): ソーシャルログイン機能を追加
+fix(api): レスポンスのエラーハンドリングを修正
+```
+
+### Step 4: PR body を生成する
+
+```markdown
+## Summary
+
+- 変更内容の箇条書き
+
+## Test plan
+
+- [ ] 動作確認手順1
+- [ ] 動作確認手順2
+- [ ] エッジケース確認
+
+## Design
+
+- Figma: （あれば記載）
+
+## セキュリティチェックの LOW 指摘
+
+- `ファイル:行` — 説明
+```
+
+「セキュリティチェックの LOW 指摘」の節は、Step 2 で LOW の指摘があったときだけ書く。指摘が無いときは節ごと省く。
+
+スキルからは生成表記（「Generated with …」等）を付けない。
+
+### Step 5: push して PR を作成する
+
+Step 2 のセキュリティチェックで HIGH / MEDIUM が無いと確かめた後にだけ、現在のブランチをリモートへ push する（対処後に再試行する場合は、対処後の差分で Step 2 をやり直してから push する）。push した時点で差分がリモートへ公開されるため、Step 2 より前や HIGH / MEDIUM が残っている間は `git push` を実行しない。
+
+ベースブランチの判定を push より前に置き、1 つのブロックで完結させる。ベースブランチ（既定は `gh repo view` が返す既定ブランチ。リポジトリの規約が `develop` 等なら `base=` をその名前に置き換える）の上にいるとき、detached HEAD のとき、ベースブランチ名または現在のブランチ名を取得できないときは、push せずに `exit 1` で止めて報告する。
+
+```bash
+base="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)" || base=""
+branch="$(git symbolic-ref --quiet --short HEAD)" || branch=""
+case "${base}" in  # gh --jq は null を空文字で出すが、jq 実装差に備えて null も弾く
+  ""|null) base="" ;;
+esac
+if [ -z "${base}" ] || [ -z "${branch}" ]; then
+  echo "ベースブランチまたは現在のブランチ名を取得できない（detached HEAD を含む）。push しない" >&2
+  exit 1
+fi
+if [ "${branch}" = "${base}" ]; then
+  echo "現在のブランチがベースブランチ（${base}）そのもの。push しない" >&2
+  exit 1
+fi
+git push -u origin HEAD
+```
+
+- push が拒否された場合（non-fast-forward・保護ルール・hook 等）は、`--force`・`--force-with-lease` を含む force 系の push で上書きしない。拒否の内容を報告して止める。
+- 同名のブランチが既にリモートにあっても、同じコマンドで push してよい（送る差分が無ければ何も変わらない）。
+
+push が成功したら PR を作成する。
+
+```bash
+gh pr create \
+  --base <base> \
+  --title "type(scope): subject" \
+  --body "$(cat <<'EOF'
+...
+EOF
+)"
+```
+
+既定は通常の PR とする。起動時の指示に Draft の指定（例: 「Draft で PR を作って」）があれば `--draft` を付ける。非対話実行で指定が無いときは通常の PR として作成し、そのことを最終報告に必ず書く（PR の作成依頼そのものが作成の承認であるため、止めない）。
+
+ユーザーに PR URL を返す。
+
+## 検証
+
+PR 作成後に以下を確認してから完了を宣言する（対象リポジトリに `.claude/rules/verification.md` が存在する場合はそちらの5段階ゲートに従う。存在しない場合は次の要点に従う: コマンドを新規実行し、出力全体・終了コードを確認してから完了を宣言する）。「PR を作成したはず」等の推測語での完了主張は禁止。
+
+```bash
+# PR が作成されたことと CI ステータスを確認する
+gh pr view <pr-number>
+gh pr checks <pr-number>
+```
+
+## よくある失敗
+
+| 問題 | 回避策 |
+|------|--------|
+| 先に `git push` してから Step 2 のセキュリティチェックを行い、確認前の差分をリモートへ公開してしまう | push は Step 5 で、Step 2 で HIGH / MEDIUM が無いと確かめた後にだけ `git push -u origin HEAD` で行う。拒否されても force 系の push で上書きせず報告して止める |
+| HIGH / MEDIUM のセキュリティ問題を検出しても PR 作成を続行する | Step 2 で HIGH / MEDIUM を発見したら即座に処理を中止し、ユーザーに警告して修正を依頼する |
+| LOW の指摘だけで PR 作成を止める、または LOW の指摘を PR body・報告に書かず握りつぶす | LOW は中止せず、Step 4 の PR body と最後の報告に検出内容を記載して続行する。重大度に迷う指摘は MEDIUM として扱う |
+| PR URL を返さずに完了する | `gh pr create` の出力から PR URL を取得してユーザーに提示する |
+| Conventional Commits 形式に準拠しないタイトルをつける | `type(scope): subject`（72文字以内）の形式を厳守する |
+| Closes 対象 Issue が milestone 未割当のまま PR 作成 → CI で初めて失敗する | Step 2.5 で必ず確認する。milestone を決めきれない場合も PR body に警告を残す |
+
+## 注意事項
+
+- ベースブランチはリポジトリの規約に従う
+- `git push` は Step 2 のセキュリティチェックの後にだけ実行し、force 系の push（`--force`・`--force-with-lease` を含む）はしない
+- HIGH / MEDIUM のセキュリティ問題が未解決の場合は PR 作成を中止する（LOW は PR body と報告に記載して続行する）
+- Step 2.5 の milestone 確認は省略しない（Closes 対象がない場合は Step 2.5 全体を、milestone 非運用リポジトリでは手順 3 のみをスキップ可）
+
+## sandbox 環境での実行
+
+このスキルはネットワーク越しの GitHub 操作（Step 1 の `gh repo view`・`git fetch`、`gh api`・`gh issue view` / `gh issue edit`・`git push`・`gh pr create`・`gh pr view` / `gh pr checks`）を必須とする。該当コマンドはコマンド単位で sandbox 無効にして実行する。ネットワーク遮断を解除できない環境では実行できない。`codex exec` ではネットワーク昇格の要求が出ないため、コマンドが拒否されたら実行できなかったことを報告して止める。
+
+Step 1 の `git fetch origin "+refs/heads/${base}:refs/remotes/origin/${base}"` はネットワークを使い、`.git` にも書き込む（`origin/<base>` の追跡 ref の更新）。同じ Step 1 の `gh repo view` もネットワークを使う。Step 5 の `git push -u origin HEAD` はネットワークを使ううえ、`.git` にも書き込む（リモート追跡ブランチと upstream の設定）。以下の昇格と拒否時の扱いは、Step 1 の fetch にも同様に適用する（拒否されたら分析を進めず、実行できなかったことを報告して止める。ネットワーク・認証の失敗と取り違えない）。Codex の既定 sandbox では `.git` が読み取り専用のため、対話セッションではネットワークと `.git` への書き込みの昇格を求める。`codex exec` では昇格要求が出ないため、コマンドが拒否されたら push できなかったことを報告して止める。案内は次のどちらか: `.git` を書き込み可にした permissions プロファイルで実行し直す、またはユーザーが自分で push する。`.git` 以外では、このスキルは `.agents`・`.codex` へ書き込まない。

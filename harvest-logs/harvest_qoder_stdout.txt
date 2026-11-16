@@ -1,0 +1,64 @@
+[19:20:46] index page 50/872: 2500/43554 unique
+[19:21:42] index page 100/872: 5000/43554 unique
+[19:22:40] index page 150/872: 7500/43554 unique
+[19:23:37] index page 200/872: 10000/43554 unique
+[19:24:36] index page 250/872: 12500/43554 unique
+[19:25:34] index page 300/872: 15000/43554 unique
+[19:26:32] index page 350/872: 17500/43554 unique
+[19:27:30] index page 400/872: 20000/43554 unique
+[19:28:29] index page 450/872: 22500/43554 unique
+[19:29:28] index page 500/872: 25000/43554 unique
+[19:30:26] index page 550/872: 27500/43554 unique
+[19:31:26] index page 600/872: 30000/43554 unique
+[19:32:27] index page 650/872: 32500/43554 unique
+[19:33:26] index page 700/872: 35000/43554 unique
+[19:34:25] index page 750/872: 37500/43554 unique
+[19:35:24] index page 800/872: 40000/43554 unique
+[19:36:24] index page 850/872: 42500/43554 unique
+[19:36:48] index complete: 43554 unique skills (reported total 43554)
+[19:36:49] index loaded: 43554 skills; done so far: 0
+[19:36:49] details to fetch: 43554
+[19:37:43] qoder skills: 1000/43554 done
+[19:38:38] qoder skills: 2000/43554 done
+[19:39:32] qoder skills: 3000/43554 done
+[19:40:27] qoder skills: 4000/43554 done
+[19:41:22] qoder skills: 5000/43554 done
+[19:42:17] qoder skills: 6000/43554 done
+[19:43:11] qoder skills: 7000/43554 done
+[19:44:07] qoder skills: 8000/43554 done
+[19:45:02] qoder skills: 9000/43554 done
+[19:45:58] qoder skills: 10000/43554 done
+[19:46:52] qoder skills: 11000/43554 done
+[19:47:48] qoder skills: 12000/43554 done
+[19:48:43] qoder skills: 13000/43554 done
+[19:49:39] qoder skills: 14000/43554 done
+[19:50:33] qoder skills: 15000/43554 done
+[19:51:29] qoder skills: 16000/43554 done
+[19:52:28] qoder skills: 17000/43554 done
+[19:53:25] qoder skills: 18000/43554 done
+[19:54:20] qoder skills: 19000/43554 done
+[19:55:16] qoder skills: 20000/43554 done
+[19:56:11] qoder skills: 21000/43554 done
+[19:57:07] qoder skills: 22000/43554 done
+[19:58:00] qoder skills: 23000/43554 done
+[19:58:56] qoder skills: 24000/43554 done
+[19:59:50] qoder skills: 25000/43554 done
+[20:00:44] qoder skills: 26000/43554 done
+[20:01:39] qoder skills: 27000/43554 done
+[20:02:36] qoder skills: 28000/43554 done
+[20:03:31] qoder skills: 29000/43554 done
+[20:04:28] qoder skills: 30000/43554 done
+[20:05:22] qoder skills: 31000/43554 done
+[20:06:18] qoder skills: 32000/43554 done
+[20:07:13] qoder skills: 33000/43554 done
+[20:08:09] qoder skills: 34000/43554 done
+[20:09:04] qoder skills: 35000/43554 done
+[20:09:59] qoder skills: 36000/43554 done
+[20:10:52] qoder skills: 37000/43554 done
+[20:11:48] qoder skills: 38000/43554 done
+[20:12:41] qoder skills: 39000/43554 done
+[20:13:36] qoder skills: 40000/43554 done
+[20:14:31] qoder skills: 41000/43554 done
+[20:15:25] qoder skills: 42000/43554 done
+[20:16:19] qoder skills: 43000/43554 done
+[20:16:50] qoder harvest: 43542 ok, 12 failed of 43554 indexed

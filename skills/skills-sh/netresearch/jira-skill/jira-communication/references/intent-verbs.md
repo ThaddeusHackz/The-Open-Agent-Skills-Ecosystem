@@ -1,0 +1,235 @@
+<!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
+<!-- SPDX-FileCopyrightText: Netresearch DTT GmbH -->
+
+# Intent verbs
+
+`jira-issue.py work / qa / qa-fail / act` — single-call context bundles for the four common intents.
+
+## Access — this skill IS the Jira path
+
+Reach for these scripts on **any** Jira intent, even with no issue key — "create a ticket in the right project", "find the ticket for X", or just naming Jira. You do not need a key to start (`jira-search.py` finds existing issues by JQL; `jira-create.py` opens new ones; the right project comes from your own organisation-specific project-routing conventions).
+
+Do **not** conclude "no Jira access" from an MCP connector's scopes. A Confluence/Atlassian MCP connector — e.g. a cloud `*.atlassian.net` connector limited to Confluence — is a **separate system** from these scripts, which talk to Jira Server/DC (or Cloud) directly via `~/.env.jira`. A connector being Confluence-only says nothing about Jira reachability. If Jira genuinely seems unreachable, run `jira-setup.py` to check config — and tell the user up front, immediately, rather than burying it in options.
+
+## When to load
+
+Whenever you have a Jira issue key and need more than just meta. Each verb composes the right bundle for one intent. Empirically replaces 3–6 separate calls.
+
+## The four verbs
+
+```bash
+jira-issue.py work    KEY   # description + all comments + attachments + links
+jira-issue.py qa      KEY   # description + handover bundle (comments around INTO_QA transition)
+jira-issue.py qa-fail KEY   # description + reviewer rejection + implementer scope context
+jira-issue.py act     KEY   # meta + available transitions
+```
+
+`work` opens with a `!! CLAIM KEY` notice on stderr when the ticket is not assigned to you or its status category is To Do/Done or its name is in `qa_status_names` or `resolved_status_names` (Reopened has category To Do); `--json` carries it as `claim: {needed, reasons, commands}`. `working_status_names` plays no part: it lists where rejected work lands and includes Open and Backlog.
+
+`jira-issue.py get KEY` is unchanged — it still prints the full issue (description, attachments, links) by default. Use `--fields summary,status,assignee,…` for a meta-only lookup.
+
+## QA-handover heuristic (`qa` verb)
+
+The handover comment is *not* always written after the transition. Empirical sample (10 tickets, 41 transitions): 80% of handover comments come **before** the transition click.
+
+The verb finds the most recent INTO_QA transition (by classification, see below) and includes:
+
+1. All comments by the **transition author** in `[T_prev, min(T_next, T_transition + 1h)]` — captures the handover whether written before or after the click. `T_prev` and `T_next` bracket the transition between adjacent status changes.
+2. All comments by **any author** in `[T_transition, T_next)` — the QA discussion that follows.
+
+Deduplicated, chronologically sorted. Fallback if no INTO_QA in changelog: last 5 comments + warning.
+
+## QA-fail heuristic (`qa-fail` verb)
+
+Symmetric to `qa`:
+
+1. Find the most recent **REJECT** transition.
+2. Include all comments by the **reviewer** (transition author) in `[T_prev_into_qa, T_transition + 1h]`.
+3. Include all comments by **any author** in `[T_transition, T_next)`.
+4. Include all comments by the **implementer** (= author of the most recent INTO_QA before the reject) in `[T_prev_into_qa - 1h, T_transition]` — this captures the implementer's scope/clarification context that the rejection is reacting to. The 1h backward extension catches handover comments written just before the INTO_QA click.
+
+Fallback if no REJECT in changelog: last 5 comments + warning.
+
+## Status-set classification
+
+Transitions are classified using three configurable status sets:
+
+| Set | Default | Meaning |
+|---|---|---|
+| `qa_status_names` | `QA, Review, In Review, Code Review, Ready for QA, QA2, UAT, Acceptance, Testing` | Where the work goes for review |
+| `working_status_names` | `In Progress, Open, Reopened, To Do, In Development, Backlog, QA failed` | Where rejected work lands. **Note:** `QA failed` is in this set, not `qa`, because it's functionally a reject-target (review verdict: send back to dev), not a review stage. |
+| `resolved_status_names` | `Closed, Resolved, Done, Won't Fix, Cancelled` | Terminal states |
+
+A transition is classified as:
+
+- `into_qa` — `from ∉ qa AND to ∈ qa` (handover)
+- `reject` — `from ∈ qa AND to ∈ working` (fail)
+- `forward` — `from ∈ qa AND to ∈ qa AND from ≠ to` (multi-stage progression: `QA→QA2`, `Review→UAT`, `QA→Acceptance` — **NOT** a fail)
+- `resolved` — `to ∈ resolved` — **pass `--resolution <value>`** when executing this transition, unless the screen rejects it (see below)
+- `out` — `from ∈ qa AND to ∉ qa` (uncategorised QA exit)
+- `other` — neither side touches QA
+
+Forward-progression detection is what lets a multi-stage QA workflow (Review → UAT → Acceptance → Closed) work identically to a single-stage one without code changes.
+
+### Resolution field on terminal transitions
+
+When a transition lands in a resolved status, Jira stores two separate things: the **status** (visible in the badge) and the **resolution** (the green checkmark, JQL `resolution is not EMPTY`). The transition API sets the status but leaves the resolution field empty unless you pass it explicitly. An empty resolution means the ticket appears unresolved in filters and dashboards even though the status reads "Resolved".
+
+Pass `--resolution` with the value that matches the outcome wherever the transition screen accepts it:
+
+| Outcome | `--resolution` value |
+|---|---|
+| Work completed as planned | `Done` |
+| Decided not to do | `Won't do` |
+| Same issue already exists | `Duplicate` |
+| Bug could not be reproduced | `Cannot Reproduce` |
+| Request rejected / out of scope | `Declined` |
+| No longer relevant | `Obsolete` |
+
+```bash
+jira-transition.py do PROJ-123 "Resolved" --resolution Done
+jira-transition.py do PROJ-123 "Resolved" --resolution "Won't do"
+jira-transition.py do PROJ-123 "Resolved" --resolution Duplicate
+```
+
+#### When the screen rejects `--resolution`
+
+Not every workflow puts the resolution field on its terminal transition screens. Where it is absent the transition fails outright:
+
+```
+jira-transition.py do KEY "Deployed to PROD" --resolution Done
+→ Field 'resolution' cannot be set. It is not on the appropriate screen, or unknown.
+```
+
+**Do not pre-screen with `expand=transitions.fields` — it under-reports.** A workflow whose transitions all came back *without* a `resolution` key in `GET /issue/KEY/transitions?expand=transitions.fields` still accepted `--resolution Done` on its Close transition and set the field (measured on Jira DC 9.12, 2026-08: every transition of the workflow reported `resolution` absent, the sibling ticket's history showed resolution set in one Backlog → Closed hop, and passing `--resolution` reproduced exactly that). Absence in the expand is therefore no evidence the transition will reject the field. Attempt the transition **with** `--resolution`; the error message above is the only reliable rejection signal, and only after seeing it fall back to the numbered options below.
+
+Setting it afterwards via `jira-issue.py update KEY --fields-json '{"resolution": {"name": "Done"}}'` fails with the same message — though for a different screen: the transition rejection is about the *transition* screen, this one about the issue's *edit* screen. See *"Field 'xyz' cannot be set"* in `troubleshooting.md`.
+
+The transition itself is atomic — the whole POST is rejected, so nothing half-applies and the issue keeps its previous status. Work through the options in order:
+
+1. **Check whether another transition carries the field.** `jira-transition.py list KEY` may offer a different terminal transition whose screen does include `resolution`; prefer that one.
+2. **Otherwise retry without `--resolution`** and let the ticket land with an empty resolution. On workflows built this way (deployment pipelines with several terminal-looking gates) the resolution is applied by a workflow post-function at a later step, not by the transition you are running.
+3. **Verify rather than assume.** Once the workflow has reached its true terminal status, confirm the post-function actually fired:
+
+   ```bash
+   # One ticket
+   jira-search.py query "key = PROJ-123 AND resolution is EMPTY"
+
+   # Whole project — audit everything that closed without a resolution
+   jira-search.py query "project = PROJ AND statusCategory = Done AND resolution is EMPTY" -f key,status
+   ```
+
+   A hit means the resolution is genuinely missing — say so to the user instead of treating step 2 as success. (`resolution is EMPTY` is the "unresolved" mapping in `references/jql-cookbook.md`'s phrase table; note its *"Resolution helpers"* heading is about resolving fuzzy **names**, not this field.)
+
+Available resolution names vary by Jira instance. Query yours with:
+```bash
+curl -s -H "Authorization: Bearer $JIRA_PERSONAL_TOKEN" "$JIRA_URL/rest/api/2/resolution" \
+  | python3 -c "import sys,json; [print(r['name']) for r in json.load(sys.stdin)]"
+```
+
+### Fields the screen requires beyond resolution
+
+A transition screen is not limited to `resolution` — `list`'s `Requires`
+column can name any field, including ones that look pre-filled already, e.g.
+`summary`. `do` rejects the attempt up front rather than posting a payload the
+API would reject anyway:
+
+```
+jira-transition.py do PROJ-123 371
+✗ Transition 'Close' requires: summary
+```
+
+Pass it with `--fields-json`, same shape as `jira-issue.py update`:
+
+```bash
+jira-transition.py do PROJ-123 371 --resolution Done \
+  --fields-json '{"summary": "Unchanged summary, resubmitted because the screen demands it"}'
+```
+
+Observed on jira.netresearch.de (OPS project, 2026-09): a `Backlog → Closed`
+"Close" transition required `summary` on its screen even though the value
+was not changing — the transition screen re-submits whatever fields it
+lists, it does not carry the issue's current value forward automatically.
+`--fields-json` accepts any field the screen names this way, not only
+`summary`.
+
+### Walking a multi-stage workflow (`path`)
+
+`jira-transition.py do` performs **one** transition. Workflows with intermediate
+gates (e.g. `QA → UAT Stage → Ready for deployment → Resolved → Closed`) otherwise
+need one `list` + one `do` per stage — closing a ticket deep in such a workflow is
+4+ round-trips of discovering the next status by hand.
+
+`path` collapses that into one call: it runs the `list → pick → do` loop internally,
+walking from the current status to a target.
+
+```bash
+jira-transition.py path PROJ-123 Closed --resolution Done   # walk all the way to Closed
+jira-transition.py path PROJ-123 "Ready for deployment"     # walk to an intermediate gate
+jira-transition.py path PROJ-123 Closed --dry-run           # preview the first step
+```
+
+It is a **greedy** walk, not a graph search: the Jira API only exposes the
+transitions available from the issue's *current* status, so `path` cannot see the
+whole workflow ahead of time. At each step it takes the target if directly reachable,
+otherwise the single non-backward transition (transitions whose name matches
+`reopen/cancel/reject/decline/abort/back`, or which lead to an already-visited status,
+are treated as backward).
+If a step offers several forward options it **stops and lists them** rather than guess —
+pick one with `do` and re-run. `--resolution`/`--comment` apply only to the final step;
+`--max-steps` (default 10) caps the walk. Because it cannot look ahead, `--dry-run`
+shows only the *first* planned step.
+
+## Configuring status sets per Jira instance
+
+Per profile in `~/.jira/profiles.json`:
+
+```json
+{
+  "profiles": {
+    "myinstance": {
+      "url": "https://jira.example.com",
+      "token": "...",
+      "qa_status_names": ["Review", "UAT", "Acceptance"],
+      "working_status_names": ["In Progress", "Backlog", "Reject"],
+      "resolved_status_names": ["Done", "Cancelled"]
+    }
+  }
+}
+```
+
+Or via env vars (comma-separated):
+
+```bash
+JIRA_QA_STATUS_NAMES="Review,UAT,Acceptance"
+JIRA_WORKING_STATUS_NAMES="In Progress,Backlog,Reject"
+JIRA_RESOLVED_STATUS_NAMES="Done,Cancelled"
+```
+
+## Output formats
+
+All verbs support the standard global flags:
+
+- (default) Human-readable text bundle
+- `--json` Structured payload (`comments` is always a list of comment dicts; verb-specific keys like `reject_transition`, `handover_transition`, `implementer` for context)
+- `--quiet` Issue key only (after successful fetch — validates connectivity)
+
+`work`, `qa`, `qa-fail` also accept `--truncate N` to cap description and per-comment body length. `act` has no body content so the flag is omitted there.
+
+## Example: NRS-4412-style QA-fail follow-up
+
+The motivating case: "what did Björn reject, and what was Sebastian's scope context?"
+
+Before (6 calls): `jira-issue get`, `jira-comment list`, `jira-comment list | tail`, `jira-comment list | head`, etc.
+
+After (1 call):
+
+```bash
+jira-issue.py qa-fail NRS-4412
+```
+
+Returns: description + Sebastian's scope-setting handover comment + Björn's full AC review with rejection + Sebastian's response + subsequent resolution. Chronologically sorted, ready to read.
+
+## Transition names are exact strings
+
+`jira-transition.py do KEY <selector>` takes a transition ID, a transition name, or a target status name. Prefer the ID from `jira-transition.py list`: names carry emoji prefixes on some instances (`✅ Resolve`, `❌ QA failed`), two transitions can share a name up to that emoji, and two can share a target status — an ambiguous selector is refused with its candidates rather than resolved to a guess. On mismatch the error lists the available transitions with their IDs. `jira-issue.py act KEY` shows them up front.

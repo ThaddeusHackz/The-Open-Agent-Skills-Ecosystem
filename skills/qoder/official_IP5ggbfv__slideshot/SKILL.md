@@ -1,0 +1,163 @@
+---
+name: slideshot
+description: Use Slideshot to record demo videos of a web application from a natural-language flow description. Use it when the user wants the agent to create a new demo video recording of a target web app, demonstrate a feature or specific flow, manage saved target-app credentials in Slideshot, cancel runs, inspect a specific run, fetch demo artifacts, or send Slideshot product feedback.
+last-updated: 2026-05-05
+---
+
+# Slideshot
+
+Use this skill when the task is to record a demo video of a feature or specified user flow of a web application. Slideshot lets you kick off a new recording run, refine the run goal, manage saved target-app credentials, inspect run status, fetch artifacts, or send product feedback.
+
+> **Freshness check**: If more than 30 days have passed since the `last-updated` date in the frontmatter above, tell the user this skill may be outdated and point them to the update table below.
+
+## Keeping this skill updated
+
+**Source**: [github.com/slideshot/skills](https://github.com/slideshot/skills)
+
+| Installation | How to update |
+| --- | --- |
+| Claude Code plugin | `/plugin marketplace update slideshot-skills` then `/plugin update slideshot@slideshot-skills` |
+| `npx skills` | `npx skills update` |
+| Manual | Pull the latest repo and re-upload or re-copy `skills/slideshot/` into your skill directory |
+
+## Choose a runtime
+
+Slideshot exposes the same workflow through two runtimes. Pick one at the start of the session and use it consistently — do not mix invocations between them in a single recommendation.
+
+- **MCP runtime** — if `slideshot.*` MCP tools are available in this session (`create_run`, `get_run`, `list_runs`, `cancel_run`, `submit_run_input`, `list_run_artifacts`, `fetch_brand`, `list_credentials`, `create_credential`, `update_credential`, `set_default_credential`, `delete_credential`, `submit_feedback`), use them. See [`references/mcp.md`](references/mcp.md) for tool argument shapes, OAuth handling, and credential examples.
+- **CLI runtime** — otherwise, invoke the public [`slideshot-cli`](https://www.npmjs.com/package/slideshot-cli) npm package via `npx -y slideshot-cli ...`. See [`references/cli.md`](references/cli.md) for command syntax, API-key auth, and JSON option examples.
+
+If neither MCP tools nor a shell are available, tell the user the Slideshot connector is not connected and stop. Do not invent another execution path.
+
+## Core workflow
+
+1. Make sure the user is authenticated into Slideshot before starting. Auth specifics differ between runtimes — see the matching runtime reference.
+2. Before creating a run, confirm:
+   - The target URL.
+   - Whether the app requires login.
+   - The flow the user wants recorded, in enough detail to write a single coherent goal.
+3. **Creating a run is billable and produces a user-facing video.** Wrong assumptions waste both time and money. Before calling the create-run tool / command:
+   - Fetch brand information for the target URL up front when the runtime supports it (`fetch_brand` in MCP or `brand fetch` in the CLI). Use that output only to make your proposed customization options more relevant.
+   - You **MUST** ask the user about any unspecified customization that could materially affect the recording, unless the user already provided it.
+   - **Never invent values on the user's behalf.** If the user has no preference for an option, omit it instead of guessing.
+   - **Do not treat fetched brand information as confirmed user intent.** Present the relevant options and recommendations, then wait for the user to confirm before setting them on the run.
+   - **Do not call create-run in the same turn as the user's initial request when any of the choices below are still unspecified.** Ask first, then call after the user responds.
+   - For login-required runs, **do not omit `options.auth`**. Set it explicitly to `default` or to a specific saved credential after confirming the user's intent. Omitting `auth` for a login-required flow is a bug, not a default.
+
+   Ask the questions one at a time, do not bundle them, and explain what each option does instead of just naming the field. When a structured question tool is available in the runtime (e.g. `AskUserQuestion`, `request_user_input`), prefer it over free-text prompts so the user can pick from concrete options. Cover:
+   - Login handling: no login, default saved credential for the target hostname, or a specific saved credential.
+   - Blur visible emails during recording.
+   - Show keyboard shortcuts in the demo video.
+   - Cursor style (`small`, `default`, `large`, or `none`).
+   - Video background (`solid` or `gradient`; collect colors and direction if needed).
+   - Output video size. Present these options: 1920x1080 Full HD (default), 1280x720 HD, 1080x1080 Square, or Custom. If the user picks Custom, ask for the width and height.
+   - Inner content layout (padding or scale around the captured browser content).
+   - Branded intro card prepended to the demo (optional, opt-in only). If the user wants one, walk them through the template, copy, and style as described in [Intro card guidance](#intro-card-guidance).
+   - Export `demo.gif` as well as MP4 (default `false`, opt-in only).
+
+   **Anti-pattern:** immediately calling `list_credentials` and `create_run` for a login-required request without first confirming customization choices.
+   **Do this instead:** ask focused follow-up questions covering each still-unspecified auth, video, intro, and artifact option. Only call create-run after the user has answered.
+4. If the demo requires login, do credential preflight before creating the run:
+   - List saved credentials and look for one whose domain matches the target URL hostname.
+   - Prefer the matching default credential when one exists. The auth source for that case is `default`.
+   - To pin a specific credential, reference it by id with auth source `saved`.
+   - For genuinely public flows, use auth source `none` (or omit auth entirely).
+   - If no suitable saved credential exists, prefer asking the user to add it securely in the web app at [app.slideshot.ai](https://app.slideshot.ai) instead of pasting long-lived secrets into chat. Only create credentials from chat when the user explicitly asks for it.
+   - Keep the run target URL hostname aligned with the credential domain. Credential matching is hostname-based.
+   - For login-required runs, set `options.auth` explicitly. Do not leave it unset and assume the runtime will pick something sensible.
+5. Write one strong goal per run that describes a single coherent demo path with a clear visible end state. If the description is underspecified, ask 1–2 focused follow-up questions before creating the run.
+   - If the user needs multiple flows, kick off each recording run one by one. The runs enter the queue and are processed in order.
+6. After creating a run:
+   - Tell the user the `run_id` returned by the runtime.
+   - Tell the user to monitor that specific run in the web app at `https://app.slideshot.ai/?runId=<run-id>`.
+   - If multiple runs were created, give one per-run URL for each run, not a generic runs list.
+   - Do not poll for run status in a loop. Stop and wait for the user to ask you to inspect a run, provide input for a run, cancel it, or fetch artifacts after completion.
+7. When the user later asks you to inspect a specific run, branch on its status:
+   - `succeeded`: list artifacts and surface or download the requested files.
+   - `awaiting_input`: surface the prompt to the user and continue with the same run via the runtime's input mechanism. This is the right path for OTPs and magic-link codes — never start a new run for these.
+   - `failed` or `cancelled`: report the error and the likely cause, then offer to retry with a better goal, corrected credentials, or different options. Change one thing at a time on retry.
+   - `queued`, `running`, anything in progress: report status and stop. Do not poll.
+8. To stop a run that is clearly wrong, duplicate, or no longer wanted, cancel it. Only do this when the user explicitly asks or when the run is obviously off-target.
+9. When a run failure looks like a Slideshot bug or product gap, offer to send feedback and include the related run id. You can also send feedback for general feature requests or product frustration even when no specific run failed.
+10. Avoid redundant reruns. If a run already succeeded, fetch its artifacts instead of creating another one. If a run is awaiting input, continue it instead of replacing it. List recent runs first if you need to find an existing one before starting a fresh one.
+
+## Goal-writing guidance
+
+A good Slideshot goal gives the runner enough detail to normalize the task into concrete success criteria without guessing.
+
+Include:
+
+- The exact product flow to show, in order.
+- The intended starting state if it matters, especially authentication state, workspace, or seeded data.
+- The visible end state that should be on screen when the demo finishes.
+- Important interaction details such as opening a modal, using a keyboard shortcut, or showing a specific chart or settings panel.
+- Visual or capture constraints that materially affect the output, such as blurred emails or shortcut overlays.
+- Any specific wait time that matters for the demo.
+
+Avoid:
+
+- Vague requests like "show the app" or "make a demo of onboarding".
+- Bundling unrelated journeys into one run when separate runs would be clearer.
+- Omitting critical blockers such as required credentials, tenant/workspace choice, or prerequisite records the flow depends on.
+
+If the request is underspecified, ask 1–3 focused follow-up questions about the desired flow before creating the run.
+
+### Strong examples
+
+`Sign in to https://app.example.com, open the existing "Q2 Pipeline" workspace, create a report named "Weekly Revenue", apply the last-30-days filter, and end on the analytics dashboard with the revenue chart fully visible.`
+
+`Open the pricing page, scroll through the plan cards, open the enterprise contact modal, fill the work email field, and stop with the modal confirmation state visible. Blur any visible email addresses in the recording.`
+
+### Weak examples
+
+`Show the product.`
+
+`Go through onboarding, settings, billing, analytics, and admin.`
+
+## Intro card guidance
+
+The intro is an optional branded card prepended to the polished demo video. It is fully opt-in — omit `options.intro` entirely unless the user has asked for one. When the user does want an intro, walk them through the choices below one at a time. Do not invent the copy, colors, or logo — propose options and let the user confirm.
+
+### Walk the user through the choices
+
+1. **Confirm they want an intro at all.** It is optional, adds runtime cost, and not every demo benefits from one. Skip the rest of this section if they decline.
+2. **Pick a template. Present *all six* templates to the user and let them choose — do not pre-filter, do not recommend a single one based on your guess of what fits.** Enumerate every row of the [Template reference](#template-reference) table by name with a one-line plain-language description of what each shows. The user picks. Confirm the selection before moving on. The template choice determines which content and style fields are required.
+3. **Collect the content.** Templates that include text need a single line of copy (max 120 characters). Templates that include a logo need an absolute `http://` or `https://` URL pointing to the logo image. The image is fetched once before recording starts, so it must be reachable.
+4. **Collect the style.** Most templates take a `background` (solid color or gradient) and a `textColor` hex. The backdrop template instead takes a `backdropColor` and a `textColor`. The logo-only template takes only a `background`.
+5. **Propose a title for text templates.** Write a short, demo-relevant title from the run goal — for example, "Create a Q2 revenue report" for a goal that ends on the analytics dashboard. Show it to the user, let them edit it, then use the confirmed copy. Never silently use your own draft.
+
+### Template reference
+
+| Template | What it shows | Required content | Required style |
+| --- | --- | --- | --- |
+| `simple` | Centered text, mask-reveal-up animation. Clean and minimal. | `text` | `background`, `textColor` |
+| `simple-spring-scale-in` | Centered text, springy scale-in animation. More energetic than `simple`. | `text` | `background`, `textColor` |
+| `simple-line-by-line-slide` | Left-aligned text that slides in line by line. Good for slightly longer copy. | `text` | `background`, `textColor` |
+| `simple-line-by-line-slide-with-logo` | Same line-by-line slide, with a static logo above the text. Use when the user wants light branding alongside copy. | `text`, `logoUrl` | `background`, `textColor` |
+| `simple-line-by-line-slide-with-logo-and-backdrop` | Logo + left-aligned text layered over the demo's first frame, with a single-color diagonal opacity gradient (opaque at bottom-left, transparent at top-right). Strong branding without a flat background. | `text`, `logoUrl` | `backdropColor`, `textColor` |
+| `simple-logo` | Logo only, centered, with a fade + rise + blur curve. No text at all. | `logoUrl` | `background` |
+
+### Constraints
+
+- `text` is required for every template except `simple-logo` and must be 1–120 characters.
+- `logoUrl` is required for the three logo templates and must be an absolute `http://` or `https://` URL.
+- All colors are `#RRGGBB` hex strings.
+- Gradient `background` takes `from`, `to`, and an optional `direction` (`vertical`, `horizontal`, or `diagonal`; defaults to `diagonal`).
+- The `backdrop` template's `backdropColor` is a single solid color rendered as a diagonal opacity gradient over the demo's first frame — there is no `background` field on that template.
+
+See the runtime references for concrete `options.intro` JSON examples.
+
+## Operational notes
+
+- Stable public artifact names are `raw.mp4`, `demo.mp4`, and `plan.json`. `demo.gif` is also a public artifact when the run was created with the GIF artifact opt-in.
+- When a run is `awaiting_input`, the runtime surfaces a prompt that tells you what to ask the user. The most common cases are authentication OTPs and magic-link codes. Continue the same run instead of starting over.
+- Saved credential matching is hostname-based. If the saved credential domain is `app.example.com`, prefer a target URL like `https://app.example.com/...` rather than a different hostname that later redirects there.
+- Email-only saved credentials are valid; the password field is optional.
+- Creating a run is billable and produces a user-facing video. Wrong assumptions waste both time and money — confirm customization before starting it.
+- After creating a run, point the user to the per-run web-app URL `https://app.slideshot.ai/?runId=<run-id>` instead of the generic runs list, and do the same for each run when multiple runs were started.
+- When the user is generally frustrated, reports a product problem, or shares a feature request, sending feedback is appropriate even when no specific run failed.
+
+## References
+
+- [`references/mcp.md`](references/mcp.md) — MCP tool argument shapes, OAuth handling, examples for the MCP runtime.
+- [`references/cli.md`](references/cli.md) — `slideshot-cli` command syntax, API-key auth, JSON option examples for the CLI runtime.

@@ -1,0 +1,19 @@
+# personal-semantic-preference delete
+
+
+Scope: use a positive project ID for project personal semantics, or `--project-id -1` for private global analysis semantics. The CLI routes global CRUD to `business_semantics.global_personal_context.*`; existing positive-project capability IDs are unchanged. Zero and other negative IDs are invalid. Global scope is isolated by authenticated company and owner. A missing global capability is a deployment prerequisite, not an empty directory or permission to fall back to a project write.
+Soft-delete one personal semantic preference using optimistic locking.
+
+Use this only after explicit user confirmation to remove a saved personal preference.
+
+Command:
+
+```bash
+ae-cli personal-semantic-preference delete --project-id <project_id> --id <preference_id> --expected-revision <revision> [--request-id <id>] --yes
+```
+
+Read the current item first and pass its revision as `--expected-revision`. This is a high-risk write; use `--dry-run` when the target is ambiguous.
+
+Do not use this command for automatic stale/expired preference handling. Stale or low-freshness personal preferences are hidden by list filtering and backend maintenance.
+
+Output is the gateway envelope. `data.deleted` identifies the deleted preference and status. After deletion, it should no longer appear in `personal-semantic-preference list`.

@@ -1,0 +1,103 @@
+{
+  "kind": "default",
+  "revisionStatus": "draft",
+  "nodes": [
+    {
+      "id": "country-check",
+      "type": "applicantLevel",
+      "name": "Country selector",
+      "levelName": "Country Selector"
+    },
+    {
+      "id": "route",
+      "type": "exclusiveChoice",
+      "name": "Country router"
+    },
+    {
+      "id": "reject-region",
+      "type": "finalRejection",
+      "name": "Region not allowed",
+      "labels": [
+        "WRONG_USER_REGION"
+      ]
+    },
+    {
+      "id": "idv",
+      "type": "applicantLevel",
+      "name": "Identity check",
+      "levelName": "IDV"
+    },
+    {
+      "id": "idv-result",
+      "type": "exclusiveChoice",
+      "name": "IDV result"
+    },
+    {
+      "id": "manual",
+      "type": "manualReview",
+      "name": "Manual review"
+    }
+  ],
+  "edges": [
+    {
+      "from": "country-check",
+      "to": "route"
+    },
+    {
+      "from": "route",
+      "to": "reject-region",
+      "condition": {
+        "or": [
+          {
+            "and": [
+              {
+                "op": "in",
+                "args": [
+                  {
+                    "exp": "applicant.country"
+                  },
+                  {
+                    "lit": "[\"UZB\", \"DEU\", \"AFG\"]"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "from": "route",
+      "to": "idv",
+      "on": "approved",
+      "condition": {
+        "or": [
+          {
+            "and": [
+              {
+                "op": "in",
+                "args": [
+                  {
+                    "exp": "applicant.country"
+                  },
+                  {
+                    "lit": "[\"USA\", \"CAN\"]"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "from": "idv",
+      "to": "idv-result"
+    },
+    {
+      "from": "idv-result",
+      "to": "manual",
+      "on": "rejected"
+    }
+  ]
+}

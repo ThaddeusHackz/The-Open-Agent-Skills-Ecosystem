@@ -1,0 +1,76 @@
+# Subagent mode
+
+In subagent mode this session is the controller. Subagents write code; the controller
+decides, rechecks, and keeps the journal. A subagent never edits the execution record.
+Subagents are the default mode when the plan says `Execution: unset` (skill, step 2).
+
+## The brief
+
+Each brief stands on its own, because the subagent sees nothing of this conversation:
+
+- **Goal** - the task's title and what it must produce (`Produces`), plus the plan's
+  `Goal` in one line for orientation.
+- **Scope** - the task's `Files`, the `Consumes` it can rely on, and the paths of the spec
+  and plan to read. Point at files; do not paste conversation history. When the subagent
+  works in a separate worktree, give absolute paths to the plan and spec in the
+  controller's checkout: that copy is authoritative, and the subagent neither reads nor
+  edits a copy of the plan inside the worktree.
+- **Do not touch** - paths outside the task, the uncommitted and staged changes listed in
+  `Initial dirty state`, the execution record, Git history (no reset, stash, clean, or
+  force operations), and the remote (no push).
+- **How to check** - the task's `RED` and `GREEN` commands, or its `Check:`.
+- **Rules carried over** - test first where there is a seam, root cause before a fix,
+  the closed list of blockers from the skill, and the commit rule of the task when the
+  subagent commits.
+- **Report** - one status, the changed paths, the commands run with their results, and
+  anything noticed but left alone. A subagent whose brief forbids the record and that runs
+  `verify` returns the `Verify:` line in its report instead, and the controller appends
+  that line verbatim.
+- **At the end** - when installed, run `session-learnings` and a skill retrospective
+  skill (such as `fdb`), and return the lines `Learnings: ...` and `Requests: ...`. This
+  is desirable, not a condition of `DONE`.
+
+Name the subagent model in every dispatch (for example "model: sonnet") instead of
+relying on a default, and repeat it in the report so the journal can be read later
+without guessing.
+
+## Statuses
+
+The subagent ends its report with exactly one of these:
+
+| Status | Meaning | Controller action |
+| --- | --- | --- |
+| `DONE` | task finished, checks pass | rerun the checks, compare paths with `Files`, then mark `done` |
+| `DONE_WITH_CONCERNS` | finished, with doubts | rerun the checks, weigh each concern; record a `Ruling` or a `Deferred` per concern |
+| `NEEDS_CONTEXT` | cannot proceed without information | supply the missing context and dispatch again |
+| `BLOCKED` | hit one of the five blockers, or cannot make progress | check the claim; a real blocker marks the task `blocked`, anything else is work to redo |
+
+A status is a claim. The controller reruns the task's check on the tree itself before
+writing `done`, because a subagent's report is not evidence.
+
+## Retries
+
+A task that came back `NEEDS_CONTEXT` or `BLOCKED` is not sent again unchanged. Change one
+thing first: add the missing context, choose a stronger model (named explicitly), or split
+the task into smaller ones. Each retry counts as a round under the Round rule and adds a
+`Round task-<n> <k>: <cause>` line.
+
+## Parallel dispatch
+
+Several tasks go out at once only under the rules of the skill's Parallel tasks section:
+shown independence, a separate worktree per subagent (see [isolation.md](isolation.md)),
+results integrated one by one with a local cherry-pick or merge of the subagent's commits
+into the controller's branch (no push, no force) and the checks rerun, and overlap
+resolved before the next wave.
+
+## Review inside execution
+
+A self-review of a task by the controller is optional. A task review by a separate
+reviewer may be skipped when the risk is LOW or MEDIUM, the diff matches word for word the
+code of a plan that already passed review, and the controller records the decision as a
+`Ruling`; the independent review of the whole change stays mandatory, and closing the plan
+reminds of it. Keep the state proportional: a short sequential plan needs only the
+journal's `Task` line per task, while parallel waves, a long plan or a missing way to
+resume a subagent need the fuller per-task notes. The independent review of the
+whole change is `cr-request` after `verify`; reviewing every task as well would review the
+same code twice.

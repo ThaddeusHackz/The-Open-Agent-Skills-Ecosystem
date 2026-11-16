@@ -1,0 +1,95 @@
+---
+name: python-sdk-interop
+description: Minimal Python SDK guidance for exported workflows and Notte Functions
+---
+
+# Python SDK Interop
+
+Use this only when editing `notte sessions workflow-code` exports or writing a Notte Function file by hand. Keep ordinary browser tasks in the CLI skill.
+
+## Function Shape
+
+Notte Functions are Python files with a `run()` entry point. Parameters on `run()` become invocation inputs for the CLI, SDK, and HTTP endpoint; returned dicts/lists are available from `notte functions run-metadata`.
+
+A trailing module-level `run()` call is optional - the runtime invokes `run()`
+itself, so including it or omitting it makes no difference. The export emits one;
+the example below keeps it to match.
+
+```python
+from notte_sdk import NotteClient
+
+
+client = NotteClient()
+
+
+def run(url: str, query: str):
+    with client.Session(solve_captchas=True, proxies=True) as session:
+        session.execute(type="goto", url=url)
+        session.execute(type="fill", selector="input[name='q']", value=query)
+        session.execute(type="press_key", key="Enter")
+        return session.scrape(instructions="Extract results as JSON")
+
+
+run()
+```
+
+Deploy with:
+
+```bash
+FUNCTION_ID=$(notte functions create --file workflow.py --name "Search Workflow" -o json | jq -r '.function_id')
+notte functions run --function-id "$FUNCTION_ID"
+notte functions run-metadata --function-id "$FUNCTION_ID" --run-id <run-id>
+```
+
+Invoke the deployed Function as an API endpoint:
+
+```bash
+curl -L -X POST "https://api.notte.cc/functions/{function_id}/runs/start" \
+  -H "Authorization: Bearer $NOTTE_API_KEY" \
+  -H "X-Notte-Api-Key: $NOTTE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "function_id": "{function_id}",
+    "variables": {
+      "url": "https://example.com",
+      "query": "laptop"
+    }
+  }'
+```
+
+## Practical Rules
+
+- Use `from notte_sdk import NotteClient` for hosted workflows. Do not mix it with local `import notte` examples in the same file.
+- Use `client.Session(...)` as a context manager.
+- File storage is session-scoped and available automatically. Use
+  `client.Session()` for the normal case. The removed `use_file_storage` and
+  `enable_file_storage` keywords raise a `TypeError`; pass `storage=...` only
+  when intentionally supplying a `RemoteFileStorage` instance.
+- Omit `from __future__ import annotations`. Under PEP 563 the Pydantic
+  annotations become unresolved forward references and `response_format=Model`
+  fails at runtime with `PydanticUserError: Model is not fully defined`.
+- Cast run variables you use numerically (`page = int(page)`). Variables passed
+  with `--var` arrive as strings and are not coerced to your type hints.
+- If using observe IDs in Python, call `session.observe()` first. Pass the plain ID, such as `B3` or `I1`.
+- Do not put credentials in task strings. Use vaults or environment-backed setup.
+
+## Structured Extraction
+
+For CLI scraping, prefer narrow instructions:
+
+```bash
+notte page scrape --session-id <session-id> --instructions "Extract title, price, and URL as JSON"
+```
+
+
+```python
+from notte_sdk import NotteClient
+
+
+client = NotteClient()
+products = client.scrape(
+    "https://example.com/products",
+    instructions="Extract visible products with name, price, and URL as JSON",
+)
+print(products)
+```

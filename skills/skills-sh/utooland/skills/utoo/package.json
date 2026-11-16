@@ -1,0 +1,38 @@
+{
+  "name": "@utoo/skills",
+  "version": "1.0.2",
+  "description": "utoo toolchain skills from ai",
+  "main": "index.js",
+  "scripts": {
+    "postinstall": "node install-skill.js",
+    "preuninstall": "node uninstall-skill.js",
+    "test": "node install-skill.js && echo 'Installation test completed. Check ~/.claude/skills/'",
+    "lint": "echo 'Add your linting commands here'"
+  },
+  "files": [
+    "SKILL.md",
+    "reference.md",
+    "examples.md",
+    "scripts/",
+    "install-skill.js",
+    "uninstall-skill.js",
+    ".claude-skill.json"
+  ],
+  "keywords": [
+    "claude-code",
+    "skill",
+    "ai-assistant",
+    "agent-skill",
+    "claude",
+    "utoo"
+  ],
+  "author": "elrrrrrrr@gmail.com",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/utooland/skills.git"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nerd Review"
+  short_description: "Review code, documents, products, tests, and hotfixes"
+  default_prompt: "Use $nerd-review to evaluate this artifact with relevant companion skills and report severity-ranked findings without edits."

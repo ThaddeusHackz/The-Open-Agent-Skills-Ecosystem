@@ -1,0 +1,750 @@
+---
+name: agent-fs
+description: >-
+  Use when the user wants to store, retrieve, search, or manage files in agent-fs —
+  an agent-first filesystem backed by S3. Triggers on: "save this to agent-fs",
+  "find that file", "find a file by name", "store this document", "search agent-fs", "list my files",
+  "show version history", "revert file", "set up agent-fs", "get a signed url",
+  "share this file", "share link", "public link", "one-off link", "revoke a share link", "list my shared links", "manage shared links",
+  "publish a site", "host this html", "share a folder", "manage members", "invite user", "invite to a drive", "add to drive", "give access to drive", "invite someone without an account", "accept an invite", "pending invites", "list members", "remove member",
+  "update role", "reset api key", "rotate api key", "lost my api key",
+  "watch drive changes", "stream file changes", "star this file",
+  "add to favorites", "my favorites", "webhook", "notify me when mentioned",
+  "webhook deliveries", "redeliver a webhook", "why did my webhook fail",
+  "notify on comments", "send comment events to slack", "verify webhook signature",
+  "webhook on file change", "notify when a file is written", file
+  persistence for agents, shared agent filesystem, or any
+  mention of the agent-fs CLI. Also use when the user needs to manage drives,
+  manage org/drive members, generate presigned URLs, check recent activity, or use
+  semantic search across stored files. Also use when the user wants to run SQL
+  over stored data files ("query this csv", "sql over my files", "duckdb",
+  "aggregate the parquet file", "query the sqlite db", "join these spreadsheets").
+  Also use when the user wants to mount or
+  unmount agent-fs as a Linux FUSE filesystem ("mount agent-fs", "fuse mount",
+  "fuse", "remote mount", "sandbox mount", "expose drives as files",
+  "use cat/grep/mv on my agent-fs files", "umount the drive", "mount a remote
+  drive", "mount from sprite", "mount from e2b", "mount from hetzner"). Also use
+  when the user wants to use agent-fs as a just-bash filesystem. Also use when the
+  user wants to set up agent-fs without Docker or S3 ("local filesystem backend",
+  "filesystem storage", "no docker", "onboard --filesystem", "store files on disk").
+  If the user
+  mentions agent-fs in any context, always consult this skill.
+---
+
+# agent-fs CLI
+
+agent-fs is an agent-first filesystem with full versioning, full-text search (FTS5), and semantic search. It provides a CLI that outputs JSON, making it ideal for agent workflows. Files are organized in drives within orgs.
+
+## Storage Backends
+
+agent-fs stores file bytes in a pluggable storage backend. The durable value — version history, comments, and search — lives in SQLite and works identically on every backend.
+
+| Backend | Setup | Versioning tier | `signed-url` |
+|---------|-------|-----------------|--------------|
+| **S3 / MinIO** (default) | `agent-fs onboard -y` (local MinIO, needs Docker) or `--s3-*` flags for any S3-compatible store (AWS, R2, Tigris, etc.) | Full — `revert` + historical `diff` via S3 object versioning | Real presigned URL (public, time-limited) |
+| **Local filesystem** | `agent-fs onboard --filesystem` (no Docker, no S3) | Full — `revert` + historical `diff` via content-addressed blobs on disk | Falls back to an authenticated in-app link (requires sign-in; does not expire) |
+
+Both backends are **full-tier**: every op — including `revert` and historical `diff` — works. Future backends may be **basic-tier** (no object versioning): on those, `revert` and historical `diff` are unavailable and fail cleanly with an `UNSUPPORTED_OPERATION` error (HTTP 422) rather than a raw storage error — current content, listing, comments, and search keep working. Check a backend's capabilities before relying on versioning if you're unsure which backend a drive uses.
+
+## Quick Start
+
+```bash
+# 1. Set up (local MinIO — requires Docker)
+agent-fs onboard -y
+
+#    ...or with no Docker/S3 at all — store bytes on the local filesystem:
+agent-fs onboard --filesystem            # uses ~/.agent-fs/storage
+agent-fs onboard --filesystem --storage-root /data/agent-fs   # custom dir
+
+# 2. Optionally start the daemon (CLI auto-detects and works without it)
+agent-fs daemon start
+
+# 3. Start using it
+echo "hello world" | agent-fs write docs/readme.txt -m "initial version"
+agent-fs cat docs/readme.txt
+```
+
+For custom S3 (AWS, R2, etc.), use flags: `agent-fs onboard --s3-endpoint <url> --s3-bucket <name> --s3-access-key <key> --s3-secret-key <key>`.
+
+The local-filesystem backend (`--filesystem`, equivalently `--storage local`) needs no Docker and no S3 — bytes are stored under `--storage-root` (default `~/.agent-fs/storage`), with every version content-addressed so `revert` and historical `diff` work the same as on S3.
+
+## just-bash Adapter
+
+Use `@desplega.ai/agent-fs-just-bash` when a `just-bash` environment needs to
+read and write through agent-fs as its `fs` implementation.
+
+```ts
+import { Bash } from "just-bash";
+import { AgentFsFileSystem } from "@desplega.ai/agent-fs-just-bash";
+
+const fs = new AgentFsFileSystem({
+  baseUrl: process.env.AGENT_FS_API_URL,
+  apiKey: process.env.AGENT_FS_API_KEY,
+  orgId: "org_...",
+  driveId: "drive_...",
+});
+
+const bash = new Bash({ fs, cwd: "/" });
+```
+
+The adapter uses `/raw` for byte-safe reads/writes and `/ops` for listing and
+metadata. Empty directories are represented by a hidden `.agent-fs-dir` marker;
+symlinks are unsupported and throw `EPERM`.
+
+## Essential Patterns
+
+1. **Use JSON for machine output** — pass `--json` when parsing CLI output (except `download` without `-o`, which writes raw bytes to stdout; `daemon status` and `auth register` print human-readable text).
+
+2. **Auto-detection** — the CLI automatically detects whether the daemon is running. If it is, commands go via HTTP; otherwise, they use embedded mode directly. No user action needed.
+
+3. **Default org/drive resolution** — with no `--org`/`--drive` flag, the CLI resolves in order: the flag itself, then local config (`org switch <id>` / `drive switch <id>`, sticky per machine), then the `AGENT_FS_DEFAULT_ORG_ID` / `AGENT_FS_DEFAULT_DRIVE_ID` env vars (a deployment-level hint, e.g. the shared org an agent-swarm worker container is provisioned to write to), then the account's own default org/drive from `GET /me` (the auto-created personal org, unless changed). Check `agent-fs org current` / `agent-fs drive current` (`source` field) if a write lands somewhere unexpected — a write with no flags always lands on the personal org/drive unless one of the earlier tiers is set.
+
+4. **Stdin and file upload** — `write` accepts raw bytes from stdin or `--file`, and text from `--content`; `append` accepts text via stdin or `--content`:
+   ```bash
+   # Preferred for multi-line text
+   echo "content here" | agent-fs write path/to/file.txt
+
+   # Inline for short content
+   agent-fs write path/to/file.txt --content "short text"
+
+   # Binary-safe upload
+   agent-fs write assets/screenshot.png --file ./screenshot.png
+   ```
+
+5. **Paths**: use forward slashes. A leading slash is optional. Agent FS returns and stores the canonical form, such as `/docs/notes/meeting.md`.
+
+6. **Version messages** — optional but recommended for auditability:
+   ```bash
+   agent-fs write docs/spec.md --content "..." -m "added API section"
+   ```
+
+7. **Optimistic concurrency** — use `--expected-version` on `write` to prevent conflicts:
+   ```bash
+   agent-fs write config.json --content '{}' --expected-version 3
+   # Fails if file is not at version 3
+   agent-fs write config.json --content '{}' --expected-version 0
+   # Create only: fails if a file is at the path (a moved or deleted one doesn't count)
+   ```
+
+## Command Quick Reference
+
+### File Operations
+
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `write` | `agent-fs write <path> [--content <text>] [--file <local-path>] [-m <msg>] [--expected-version <n>]` | Write text or binary bytes |
+| `cat` | `agent-fs cat <path> [--offset <n>] [--limit <n>] [--raw]` | Read text file content |
+| `edit` | `agent-fs edit <path> --old <text> --new <text> [-m <msg>]` | Find-and-replace in file |
+| `append` | `agent-fs append <path> [--content <text>] [-m <msg>]` | Append to file (stdin or --content) |
+| `tail` | `agent-fs tail <path> [--lines <n>]` | Last N lines (default: 20) |
+| `ls` | `agent-fs ls [path]` | List immediate directory contents (defaults to /) |
+| `stat` | `agent-fs stat <path>` | Show file metadata (size, version, timestamps, embedding status: `pending`, `indexed`, `failed`, or `skipped`, `etag` of the current bytes: compare for equality to tell whether content changed) |
+| `reveal` | `agent-fs reveal <path>` | Everything needed to show one file in a tree, in one call: the `ls` listing of every ancestor (root first, as `listings: [{ path, entries }]`) plus the file's `stat`. Same permissions as `ls`; `NOT_FOUND` for a missing file, `VALIDATION_ERROR` for a path over 4096 characters or 128 levels deep. Prefer `ls`/`stat` for ordinary reads. |
+| `tree` | `agent-fs tree [path] [--depth <n>]` | Recursive directory listing |
+| `glob` | `agent-fs glob <pattern> [--path <prefix>]` | Find files by pattern (`*.md`, `**/*.md`) across all storage pages. Case-sensitive |
+| `find` | `agent-fs find <query> [--path <prefix>] [--limit <n>]` | Find files by approximate name. Ignores case and accents and takes words in any order (query up to 256 characters). When no file has every word as typed, letters can be skipped (`zphr` finds `Zephyr.pdf`). Best match first: file-name hits rank above folder hits. Default limit 50. Returns `{ matches, total }` |
+| `rm` | `agent-fs rm <path>` | Delete a file (`NOT_FOUND` if no live file is at the path) |
+| `mv` | `agent-fs mv <from> <to> [-m <msg>]` | Move or rename a file (`NOT_FOUND` if the source is missing) |
+| `cp` | `agent-fs cp <from> <to>` | Copy a file (`NOT_FOUND` if the source is missing) |
+| `signed-url` | `agent-fs signed-url <path> [--expires-in <seconds>] [--inline]` | Generate a download URL. On S3/MinIO: a presigned URL (default 24h, max 7 days, `kind: "presigned"`). On local-FS: an authenticated in-app link (`kind: "app"`, requires sign-in, non-expiring). By default the URL forces a download; `--inline` makes the browser render the file instead (PDF, image). |
+| `share-create` | `agent-fs share-create <path> [--expires-in <seconds\|never>] [--max-views <n>] [--one-off]` | Create a public link for a file or folder. A file gets a `/share/<token>` page on the API host: a read-only preview (markdown, text/code, image, PDF, audio, video, and HTML rendered in a sandbox) and a Download button. A folder becomes an HTML site at `/site/<token>/` (`kind: "site"`, no view limits). Default 24h, max 7 days; `--expires-in never` (API: `expiresIn: null`) makes a link with no time limit (a revoke or a view limit still ends it); `--one-off` (= `--max-views 1`) makes a file link single-use. Returns `{ id, kind, url, urlSource, sharePath, expiresIn, expiresAt, maxViews }` (both expiry fields `null` for a link that never expires); `urlSource` is `configured` when `url` is built on `AGENT_FS_PUBLIC_URL`. |
+| `share-revoke` | `agent-fs share-revoke [<id>] [--token <token-or-url>] [--path <path>]` | Kill share links immediately. Exactly one selector: the `id` from `share-create`, the token/URL, or a file or folder path (every link to it). Creator or drive admin only. |
+| `share-list` | `agent-fs share-list [<path>] [--mine] [--include-inactive] [--limit <n>] [--offset <n>]` | List share links with `id`, `drive`, `path`, `kind`, `status` (`active`, `expired`, `exhausted`, `revoked`), `expiresAt` (`null` = never), `views`/`maxViews`, creator, `revokedAt`/`revokedBy` (who revoked it; `null` for links revoked before that was recorded or ended by their creator's removal from the drive or org) and `canRevoke`. Default: active links in the current drive; drive admins see every member's links, others only their own (`visibility`). With a path: that file or folder's links plus folder links that also publish it (`relation: "covering"`). `--mine`: your links in every drive of the current org. Never returns the URL or token (a link is shown only once, by `share-create`); revoke a row with `share-revoke <id>` on its drive. |
+| `download` | `agent-fs download <path> [-o <local-path>]` | Download raw bytes |
+| `watch` | `agent-fs watch [--json]` | Stream active-drive changes until Ctrl+C. Bearer endpoint: `GET /orgs/:orgId/drives/:driveId/events` emits `ready`, `file.changed`, and `comment.changed`. |
+
+`cat` is a paginated viewer, not a raw file reader: without `--limit`, it defaults to the first 200 lines at a TTY, but returns the **whole file** when stdout is piped or redirected (a pipe/redirect almost always means "give me everything"). Any time `cat` returns fewer lines than requested, a `truncated: showing N of M lines (use --limit)` note goes to **stderr** — never stdout, so it never corrupts piped/redirected output. The default (non-`--raw`, TTY) view also prefixes each line with a line number for readability; that prefix is **not** part of the stored bytes. For a complete, byte-exact read — required before parsing as CSV/JSON, or any time line numbers or a partial read would corrupt the data — use `agent-fs cat <path> --raw` or, better, `agent-fs download <path> -o <file>`.
+
+### Versioning
+
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `log` | `agent-fs log <path> [--limit <n>]` | Show version history |
+| `diff` | `agent-fs diff <path> --v1 <n> --v2 <n>` | Diff between versions |
+| `revert` | `agent-fs revert <path> --version <n>` | Revert to a previous version |
+
+`log` works on every backend (version metadata is in SQLite). `revert` and historical `diff` (comparing two stored versions) need a **full-tier** backend — S3/MinIO and local-filesystem both qualify. On a basic-tier backend without object versioning, `revert` fails cleanly with `UNSUPPORTED_OPERATION` (HTTP 422), and `diff` degrades instead of comparing content.
+
+Every `diff` result carries `source`: `content` (both versions compared), `summary` (not compared; `changes` is the stored edit snippet), or `none` (not compared and no summary; `write` stores none). **Only `source: "content"` with empty `changes` means the versions are identical.** The CLI prints a "versions were not compared" warning on stderr for the other two. To verify an in-place edit when `source` is not `content`, `cat` the current file and check the edited text directly.
+
+**Broken-link warnings on markdown writes.** When `write` stores a `.md`/`.mdx` file, it checks each link and image target against the same drive. Relative targets resolve from the file's own folder, like GitHub and the live viewer: in `/reports/a.md`, `img/x.png` means `/reports/img/x.png`, and `/img/x.png` means the drive root. External URLs (`https:`, `mailto:`, `data:`) and `#anchor` links are skipped. Missing targets come back as `warnings: [{ link, resolvedPath, message }]`, a field that is only present when something is missing; the CLI prints them on stderr. The write still succeeds. A warning only means "not found at write time", so upload the images first, or ignore warnings for files you upload next.
+
+### Search & Discovery
+
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `grep` | `agent-fs grep <pattern> <path>` | Regex search in file content |
+| `fts` | `agent-fs fts <pattern> [--path <prefix>]` | Full-text search with FTS5 query syntax in the active drive |
+| `search` | `agent-fs search <query> [--limit <n>]` | Hybrid search (semantic + keyword, best for general queries) |
+| `vec-search` | `agent-fs vec-search <query> [--limit <n>]` | Semantic search over distinct files in the active drive |
+| `recent` | `agent-fs recent [path] [--since <duration>] [--limit <n>]` | Recent activity (e.g., `--since 24h`) |
+| `reindex` | `agent-fs reindex [path]` | Re-index files with failed/missing embeddings. Skip `indexed` and `skipped` files |
+
+**When to use which:**
+- `find`: you know roughly what the file is called (`agent-fs find "zephyr deck"`)
+- `grep` — you know the exact pattern and path (regex)
+- `fts` — keyword search across all files (fast, FTS5-based)
+- `search` — general-purpose search combining keywords and meaning (recommended default)
+- `vec-search` — pure semantic search when you want conceptual matches only
+
+Search uses the active organization and drive. Check `org current` and `drive current`, or pass explicit `--org` and `--drive` flags.
+`glob`, `ls`, and `tree` read every S3 listing page. A drive with more than 1,000 objects remains searchable.
+`ls` reads metadata only for immediate file objects, in bounded queries using exact paths.
+Objects without live metadata remain visible with storage size and modification time.
+Folder validation limits concurrent storage checks when live metadata is absent.
+`tree` reads metadata only for files within the requested depth. Local storage also stops traversal at that depth.
+S3 still reads descendant pages to preserve directory marker behavior. Use `ls` for immediate children of a large S3 folder.
+Local listings skip unrelated directories and stop when their object limit is satisfied.
+`recent` uses a drive and timestamp index. Existing databases receive that index and the live-file summary index at startup.
+`search` and `vec-search` select semantic candidates within the active drive and count distinct files toward the limit.
+PDF text is searchable. `search` and `vec-search` results carry `page` for PDF text hits.
+With EmbeddingGemma 2, semantic search also finds PNG, JPEG, WebP, GIF, and the first 3 PDF pages as images.
+Results carry `kind: "text"` or `kind: "image"` for semantic matches.
+Image matches use `[image]` snippets. PDF page images use `[PDF page N]` snippets and carry `page`.
+Text snippets are HTML fragments: file text is HTML-escaped (`&lt;`, `&amp;`) and matches are wrapped in `<b></b>`.
+Search still returns one result per file. The best semantic chunk determines `kind` and `page`.
+Hybrid search doubles an image's vector contribution only when cosine similarity reaches 0.69 and FTS misses the file.
+Lower similarities keep one vector contribution. An FTS match still adds its keyword contribution.
+Image indexing runs in the background, so a new image can take time to appear.
+Use `agent-fs signed-url <path> --inline` to view the file, or omit `--inline` to download it.
+On a local-filesystem backend, the URL requires an authenticated drive member.
+Set `AGENT_FS_EMBEDDING_MAX_BYTES` on the server to cap text embeddings by UTF-8 bytes after base64 stripping.
+Use a positive integer. Unset or invalid values mean no cap.
+Text over the cap keeps full-text search, loses text chunks and vectors, and reports `skipped`.
+Text over 2,000,000 characters after base64 stripping also reports `skipped`, even without a byte cap.
+The cap measures extracted text for PDFs. PDF text keeps base64 to preserve page offsets. Images and PDF-page embeddings stay unchanged.
+Restart after a cap change. At boot, the daemon queues skipped files and indexed files larger than the new cap.
+When a cap is set, it also queues legacy NULL-status files whose FTS text exceeds the cap in bytes.
+These checks use original FTS bytes and can queue extra files that contain base64.
+
+Set `AGENT_FS_EMBEDDING_EXCLUDE_DRIVES` to comma-separated drive IDs to exclude their text, image and PDF-page embeddings.
+The parser trims IDs and ignores empty entries. Unset or empty values exclude no drives.
+Excluded drives keep FTS, lose vectors and report text status `skipped`. Their image status stays NULL.
+Restart after changes. The daemon queues newly excluded text files and deletes their image chunks and vectors.
+When a drive leaves the list, the daemon queues its skipped text and makes its images eligible again.
+
+Semantic results require embeddings. `vec-search` returns a hint when no provider exists, and `search` identifies keyword-only results.
+For local semantic search, set `EMBEDDING_PROVIDER=local` and `EMBEDDING_MODEL=embeddinggemma-2` to select EmbeddingGemma 2.
+With an empty model setting, fresh indexes use EmbeddingGemma 2 when transformers 4.3.1 loads locally. Otherwise, they use nomic.
+Existing nomic indexes stay on nomic. Set `EMBEDDING_MODEL=nomic-embed-text-v1.5` to select nomic explicitly.
+
+For OpenRouter text embeddings, set `EMBEDDING_PROVIDER=openrouter` and `EMBEDDING_API_KEY` (or `OPENROUTER_API_KEY`) on the server.
+`EMBEDDING_MODEL` defaults to `openai/text-embedding-3-small`; other models must support 768 dimensions.
+Restart after changing the model or provider. Existing files are re-embedded in the background after warmup, with API usage billed to the configured key. Search may mix old and new vectors until it finishes.
+
+For Cheaper Inference text embeddings, set `EMBEDDING_PROVIDER=cheaperinference` and `EMBEDDING_API_KEY` (or `CHEAPER_INFERENCE_API_KEY`) on the server.
+`EMBEDDING_MODEL` defaults to `text-embedding-3-small`; other models must support 768 dimensions. The same restart and re-embedding rules apply.
+
+`vec-search` scores are cosine similarity. The score scale depends on the model. A good match with nomic scores about 0.6. Ranking matters more than the absolute score. Every query returns its nearest files, so check their relevance before you trust a result. Hybrid `search` scores are ranks, scaled to 0 to 1: 1 means first in every list that can match the file. All three search ops return `tookMs`, the server time for the query. If the embedding provider returns an unusable vector, `search` and `vec-search` fail with `EMBEDDING_PROVIDER_ERROR` (HTTP 502). Check the provider configuration, then try again.
+
+`fts` accepts raw FTS5 syntax. Quote punctuation-bearing terms with FTS double quotes inside shell single quotes:
+
+```bash
+agent-fs glob '**/*ai-tinkerers*'
+agent-fs glob '**/*ai-tinkerers*' --path thoughts/research
+agent-fs find 'ai tinkerers'
+agent-fs find 'ai tinkerers' --path thoughts/research
+agent-fs fts '"ai-tinkerers"'
+agent-fs fts 'ai AND tinkerers'
+```
+
+Double an embedded quote inside an FTS quoted term. Backslash escaping does not escape an FTS quote.
+Glob patterns are case-sensitive. Full-text matches indexed tokens. Neither mode corrects spelling errors.
+`find` ignores case and accents. It matches skipped letters only when no file has every word as typed. It does not correct swapped or wrong letters.
+
+### SQL Queries (DuckDB)
+
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `sql` | `agent-fs sql <query> [-t name=path[:format]]... [--max-rows <n>]` | Run DuckDB SQL over stored documents |
+
+Supported formats: csv, tsv, parquet, xlsx, json, ndjson/jsonl (each also `.gz` except parquet/xlsx), sqlite (`.db`/`.sqlite`/`.sqlite3`), and `.duckdb`. Reference file-format documents directly by quoted drive path inside the query, or bind any document to a table name with `-t`. SQLite/DuckDB databases require a `-t` binding and expose their tables as `<name>.<table>`. Append `:format` to a binding to query documents with non-standard extensions (e.g. `-t logs=/raw/data.txt:csv`). Queries are sandboxed — no host filesystem or network access. Results cap at `--max-rows` (default 1000, max 10000) and at a server-side result size limit (16 MB by default); `truncated: true` in JSON output signals more rows exist.
+
+### Comments
+
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `comment add` | `agent-fs comment add <path> --body <text> [--mention <user-id-or-email>]... [--line-start <n>] [--line-end <n>] [--quote <text> [--quote-prefix <text>] [--quote-suffix <text>]]` | Add a comment to a file. `--quote` anchors it to exact text that the web app re-finds after edits; prefix/suffix pick the right occurrence when the text repeats. Repeat `--mention` to notify drive members; each one also fires a `comment.mentioned` webhook. |
+| `comment reply` | `agent-fs comment reply <comment-id> --body <text> [--mention <user-id-or-email>]...` | Reply to a comment and optionally mention drive members |
+| `comment list` | `agent-fs comment list [path] [--prefix <path>]` | List comments with inline replies. Use `--prefix` for all comments below a directory. Do not combine a positional path with `--prefix`. |
+| `comment get` | `agent-fs comment get <id>` | Get a comment with its replies |
+| `comment update` | `agent-fs comment update <id> --body <text> [--mention <user-id-or-email>]... [--clear-mentions]` | Update a comment and optionally replace or clear its mentions (author only) |
+| `comment delete` | `agent-fs comment delete <id>` | Soft-delete a comment (author only) |
+| `comment resolve` | `agent-fs comment resolve <id>` | Resolve a comment |
+| `comment reopen` | `agent-fs comment reopen <id>` | Reopen a resolved comment |
+| `comment notifications` | `agent-fs comment notifications [--kind <comment\|mention>]... [--unread] [--limit <n>]` | List notifications for the current user. The default kind is `comment`. |
+| `comment read` | `agent-fs comment read [ids...] [--all [--kind <comment\|mention>]...]` | Mark selected notification event IDs, or all active-drive notification kinds, as read. `--all` defaults to `comment`. |
+
+**Only `--mention` (the `mentions` param) notifies someone and fires the `comment.mentioned` webhook. Typing `@name` in the body text does nothing.** `comment update` with `--mention` fires `comment.mentioned` only for users it newly adds.
+
+Comments work on any file, HTML included. People can select text on a rendered `.html` page in the web app and comment on it, as on a markdown preview. Those comments carry a `quote` and the source lines the text sits on, or no lines when a script added the text after the page loaded. Use `--quote` on HTML for the same reason: it anchors to the text people see on the page.
+
+### Webhooks
+
+A webhook sends a signed HTTP POST (Standard Webhooks headers) to a URL when a comment is created, mentions someone, is edited, resolved, reopened or deleted, or when a file gets a new version. Event types: `comment.created`, `comment.mentioned`, `comment.updated`, `comment.resolved`, `comment.reopened`, `comment.deleted`, `file.changed`. A hook gets only the types it lists: `file.changed` must be named explicitly. Full receiver guide: `docs/webhooks.md` (https://agent-fs.dev/docs/webhooks).
+
+| Command | Usage | Who may run it | Description |
+|---------|-------|----------------|-------------|
+| `webhook create` | `agent-fs webhook create <url> --event <type>... [--org-wide] [--description <text>] [--path-prefix <dir>]` | Drive admin or org admin; `--org-wide` needs org admin | Create a hook for the active drive, or with `--org-wide` for every drive in the org. `--path-prefix /docs/` limits `file.changed` to that directory (comment events are not filtered). Prints the `whsec_` signing secret **once**. |
+| `webhook list` | `agent-fs webhook list [--scope drive\|org\|all]` | Drive admin (drive hooks), org admin (org hooks) | List hooks with their state (`enabled`, `disabledReason`, `consecutiveFailures`, `workerEnabled`). Never shows secrets. |
+| `webhook update` | `agent-fs webhook update <id> [--url <url>] [--event <type>]... [--description <text>] [--path-prefix <dir>] [--enable\|--disable] [--rotate-secret]` | Drive hook: drive admin or org admin. Org hook: org admin | Change a hook. `--event` replaces the list. An empty `--path-prefix` clears it. `--enable` resets the failure state. `--rotate-secret` prints a new secret once; the old one stops working at once. |
+| `webhook delete` | `agent-fs webhook delete <id>` | Drive hook: drive admin or org admin. Org hook: org admin | Delete a hook and its deliveries. |
+| `webhook test` | `agent-fs webhook test <id>` | Drive hook: drive admin or org admin. Org hook: org admin | Send a signed `ping` now and print `{ ok, statusCode, error, durationMs }`. Exits 1 unless the receiver answers 2xx. Works with the worker off. |
+| `webhook deliveries` | `agent-fs webhook deliveries <id> [--status pending\|delivered\|failed] [--limit <n>] [--cursor <cursor>] [--payload]` | Same as the hook | List the hook's deliveries newest first: `status`, `attempts`, `nextAttemptAt`, `lastStatusCode`, `lastError`. `--payload` adds the exact JSON body sent. Page with `nextCursor`. |
+| `webhook redeliver` | `agent-fs webhook redeliver <delivery-id>` | Same as the hook | Send one delivery again now with the same `webhook-id` and body. Keeps the attempt count. Refused while the hook is disabled: run `webhook update <id> --enable` first. |
+
+- The URL must be public `https://`. Private, loopback and link-local targets are refused unless the server lists the host in `AGENT_FS_WEBHOOK_ALLOWED_HOSTS`. Redirects are not followed, so give the final URL.
+- Nothing is sent unless the server runs with `AGENT_FS_WEBHOOK_WORKER=true`; `workerEnabled: false` in a response means events only queue.
+- Delivery is at least once: dedupe on the `webhook-id` header. Failures retry for about 28 hours. A `410` answer, or 5 days of failures, disables the hook.
+- Delivered and failed deliveries are pruned 30 days after creation; pending ones are kept.
+- `file.changed` fires once per new file version (write, edit, append, revert, cp, rm, FUSE writes; `mv` sends a `write` for the new path and a `delete` for the old). Its payload is `path`, `version`, `operation`, `author`, `size`, `etag`, never the content: `cat` the path to read it. A write with unchanged bytes sends nothing.
+- An org hook sees events in every drive of the org. A drive hook is managed from its own drive (`--drive <id>`).
+
+### Favorites
+
+Favorites are per user: each user stars files and folders in a drive and only sees their own stars. The server takes the user from the API key; no command accepts a user id. Viewer role is enough.
+
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `favorite-add` | `agent-fs favorite-add <path>` | Star a file or folder. Starring twice is a no-op. Returns `{ path, kind, createdAt, favorited }`. |
+| `favorite-remove` | `agent-fs favorite-remove <path>` | Remove your star. Works even when the path is gone. Returns `{ path, removed }`. |
+| `favorite-list` | `agent-fs favorite-list` | Your favorites in the active drive, sorted by path. Folders print with a trailing `/`. |
+
+Stars follow files: `mv` moves every user's star on the file to the new path, `rm` removes it, and a folder's star is removed once the folder is gone (its last file deleted or moved out).
+
+### Setup & Auth
+
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `onboard` | `agent-fs onboard [--local] [--filesystem] [--storage <minio\|local>] [--storage-root <dir>] [-y] [--embeddings <provider>]` | Set up agent-fs (storage backend + database + user). `--filesystem` (or `--storage local`) uses an on-disk backend — no Docker/S3; `--storage-root <dir>` sets its directory. |
+| `init` | `agent-fs init [--local] [-y]` | Alias for `onboard` |
+| `auth register` | `agent-fs auth register <email>` | Register a new user. A server with `AGENT_FS_REGISTER_ALLOWED_DOMAINS` set returns 403 `REGISTRATION_DOMAIN_NOT_ALLOWED` for other email domains |
+| `auth whoami` | `agent-fs auth whoami` | Show current user info |
+| `auth reset-key` | `agent-fs auth reset-key` | Reset your own API key. The old key stops working immediately. |
+
+### Member Management
+
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `members` | `agent-fs members` | List the active drive's members with user ID, email, and display name. Available to every drive member. Roles are omitted. |
+| `member list` | `agent-fs member list` | List org members (use `--drive <id>` for drive members) |
+| `member invite` | `agent-fs member invite <email> --role <role> [--to <drive>[:<role>]]...` | Invite someone to the org. Without `--to`: the default drive with `--role`. With `--to`: exactly the listed drives (id or name), each with its own role (defaults to `--role`). Anyone not yet in the org, with or without an account, gets a pending invite: the command prints an accept link to send them, and they join when they accept it. Someone already in the org has the grants applied at once. |
+| `member invites` | `agent-fs member invites` | List pending invites (id, email, drives, expiry; org admin only) |
+| `member invite-revoke` | `agent-fs member invite-revoke <id>` | Revoke a pending invite so its link stops working (org admin only) |
+| `member add` | `agent-fs --drive <id-or-name> member add <email> --role <role>` | Give an existing org member access to a drive. Raise-only: a role they already hold is never lowered, and the command prints the role they end up with. To lower it, use `member update-role --drive <id>` |
+| `member update-role` | `agent-fs member update-role <email> --role <role>` | Update org role (use `--drive <id>` for drive role). The only admin of an org or a drive cannot be demoted: make someone else admin first |
+| `member remove` | `agent-fs member remove <email>` | Remove from org (use `--drive <id>` for drive only). The only admin of an org or a drive cannot be removed, and removing an org member is refused while they are the only admin of any of its drives |
+| `member reset-key` | `agent-fs member reset-key <email>` | Reset a member's API key for this org (org admin only). The new key reaches only this org and replaces their earlier keys for it; their own keys keep working. For your own email it rotates your primary key. |
+| `invite accept` | `agent-fs invite accept <link-or-token>` | Accept an org invite as the signed-in account (its email must match the invite: an exact match, or the only account whose email differs just in letter case) |
+
+The `--drive` flag is a global option — place it before the subcommand: `agent-fs --drive <id> member list`.
+
+`members` is viewer-accessible and returns no roles. The `member` management commands remain admin-gated. Org-scoped commands require org `admin`. Drive-scoped commands (`--drive <id>`) require drive `admin` or admin of the owning org, and the drive must belong to the current org. Non-admins get a permission error. Org or drive IDs outside your memberships return "not found". `member add` only works for people already in the org (otherwise "Not a member of this org"); bringing in someone new is `member invite`, which needs org admin.
+
+**Pending invites.** Inviting anyone who is not in the org yet creates a pending invite, whether or not the email has an account: nobody joins an org without accepting. The command prints `Pending: <email> joins once they accept. Send them: <link>`; agent-fs sends no email, so pass the link on yourself. The link (`https://<app>/invite#<token>`; the token sits in the fragment so no server logs it) works once, expires in 7 days, and only for an account with the invited email. Older `/invite/<token>` links still work. Inviting the same email again replaces the old link; once the person is in the org, inviting them again applies the grants at once and the old link stops working. The invitee signs in as that email (or registers it with `agent-fs auth register <email>`), then runs `agent-fs invite accept <link-or-token>` and gets exactly the invited org role and drives. Drives deleted in the meantime are skipped. MCP: `member-invite` returns `status: "pending"` with `acceptUrl`/`token`, `member-invites` lists (or revokes with `revokeId`), `invite-accept` accepts.
+
+### Drive Management
+
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `drive list` | `agent-fs drive list` | List drives in current org |
+| `drive create` | `agent-fs drive create <name>` | Create a new drive (requires org admin) |
+| `drive current` | `agent-fs drive current` | Show current drive context |
+| `drive invite` | `agent-fs drive invite <email> --role <role>` | Invite user to the org and grant `--role` on the current drive only |
+
+Drive membership is explicit: `drive list` shows only drives you're a member of. Creating a drive automatically grants you admin membership on it; other users get access per drive: `member invite --to`, `drive invite` (current drive), or `member add` for existing org members. A plain `member invite` grants the default drive only.
+
+The HTTP drive list includes `fileCountLowerBound`, a metadata count capped at five live files, including nested files.
+Five means at least five. Older servers omit this field, and storage-only objects do not contribute.
+The live UI uses this summary for its star prompt without traversing folders.
+
+### Config & Daemon
+
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `config get` | `agent-fs config get <key>` | Get config value (dot notation: `s3.bucket`) |
+| `config set` | `agent-fs config set <key> <value>` | Set config value. Changing `embedding.provider` removes the old model and API key. |
+| `config list` | `agent-fs config list` | Show all configuration |
+| `config validate` | `agent-fs config validate` | Check S3, database, auth, embeddings health |
+| `daemon start` | `agent-fs daemon start` | Start the background daemon |
+| `daemon stop` | `agent-fs daemon stop` | Stop the daemon |
+| `daemon status` | `agent-fs daemon status` | Check if daemon is running |
+
+### FUSE Mount (Linux only)
+
+Expose all org drives as a Linux FUSE filesystem so agents can use plain shell verbs (`cat`, `grep`, `mv`, `rm`) against agent-fs content. Requires `/dev/fuse` and `SYS_ADMIN` cap; not available on macOS or in gVisor-based sandboxes.
+
+Two topologies are supported:
+- **Local mode** (default): helper talks to a local daemon over a Unix socket. Daemon must be running and have an S3 backend configured.
+- **Remote mode** (`--remote`): helper talks directly to a remote agent-fs HTTP API. No local daemon required — ideal for sandboxes (sprite, E2B, Hetzner VMs, GitHub Actions runners) that can reach a hosted agent-fs but can't run the full daemon stack.
+
+FUSE writes require the `editor` role or better on the drive — on drives where you're a `viewer`, the mount is read-only for file writes (writes fail with `EACCES`; check `<mount>/.agent-fs/errors.ndjson` for the `PERMISSION_DENIED` record).
+
+| Command | Usage | Description |
+|---------|-------|-------------|
+| `mount` | `agent-fs mount <path> [--allow-other] [--foreground]` | Mount drives at `<path>` via local daemon (e.g. `/mnt/agent-fs/<drive>/`). |
+| `mount --remote` | `agent-fs mount <path> --remote [--api-url <url>] [--api-key <key>]` | Mount against a remote agent-fs HTTP API. Reads `apiUrl`/`apiKey` from `~/.agent-fs/config.json` or `AGENT_FS_API_URL`/`AGENT_FS_API_KEY` env if flags omitted. Prefer env over `--api-key` (the latter exposes the key in `ps`). |
+| `umount` | `agent-fs umount <path>` | Unmount the FUSE mountpoint. |
+| `mount status` | `agent-fs mount status` | Show whether a mount is active and where. |
+
+## Common Workflows
+
+### Store and retrieve a document
+
+```bash
+# Write a document (multi-line via stdin)
+cat <<'EOF' | agent-fs write reports/q1-summary.md -m "Q1 summary draft"
+# Q1 Summary
+Revenue grew 15% quarter over quarter.
+EOF
+
+# Read it back
+agent-fs cat reports/q1-summary.md
+
+# Check metadata
+agent-fs stat reports/q1-summary.md
+```
+
+### Search across files
+
+```bash
+# Regex search within a specific path
+agent-fs grep "revenue|growth" reports/
+
+# Full-text search across all files (FTS5 — fast keyword matching)
+agent-fs fts "quarterly revenue"
+
+# Hybrid search (combines keyword + semantic matching — recommended default)
+agent-fs search "financial performance metrics" --limit 5
+
+# Vector-only semantic search (conceptual matches only)
+agent-fs vec-search "financial performance metrics" --limit 5
+```
+
+Without `--json`, a PDF hit prints `[page N]` after the score. An image hit prints its marker snippet:
+
+```text
+$ agent-fs search "revenue chart" --limit 3
+/reports/q1.pdf (score: 1.000) [page 2]  by local@agent-fs.local
+  Quarterly <b>revenue</b> grew 12% over Q4...
+
+/charts/revenue.png (score: 0.492)  by local@agent-fs.local
+  [image]
+
+/decks/board.pdf (score: 0.484) [page 1]  by local@agent-fs.local
+  [PDF page 1]
+```
+
+### Query data files with SQL
+
+```bash
+# Query a CSV directly by path
+agent-fs sql "SELECT category, sum(amount) AS total FROM '/finance/2026.csv' GROUP BY category" --json
+
+# Join documents of different formats
+agent-fs sql "SELECT s.name, t.tag FROM sales s JOIN tags t ON s.id = t.id" \
+  -t sales=/data/sales.csv -t tags=/data/tags.parquet
+
+# Query a stored SQLite database (tables exposed as app.<table>)
+agent-fs sql "SELECT count(*) FROM app.users" -t app=/backups/app.db
+
+# Pipe a query via stdin
+echo "SELECT count(*) FROM '/data/events.ndjson'" | agent-fs sql
+```
+
+### Review and revert changes
+
+```bash
+# View version history
+agent-fs log docs/spec.md --limit 10
+
+# Compare two versions
+agent-fs diff docs/spec.md --v1 2 --v2 5
+
+# Revert to version 2
+agent-fs revert docs/spec.md --version 2
+```
+
+### Comments and collaboration
+
+```bash
+# Add a comment to a file
+agent-fs comment add docs/spec.md --body "Needs more detail on auth"
+
+# Ask a human for a decision and send a targeted mention notification
+agent-fs comment add docs/spec.md --body "Which option should we use?" --mention human@example.com
+
+# Anchor a comment to exact text (survives edits above it; the MCP/API param is quote: { exact, prefix, suffix })
+agent-fs comment add docs/spec.md --body "Which provider?" --quote "OAuth login" --quote-suffix " flow"
+
+# Reply to a comment
+agent-fs comment reply <comment-id> --body "Added in v3"
+
+# List comments
+agent-fs comment list docs/spec.md
+
+# List unresolved comments below a directory
+agent-fs comment list --prefix docs/
+
+# Check unread notifications (the returned IDs are notification event IDs)
+agent-fs comment notifications --unread --limit 20
+
+# Check targeted mention notifications
+agent-fs comment notifications --kind mention --unread
+
+# Mark selected notifications as read
+agent-fs comment read <notification-id> [<notification-id>...]
+
+# Or acknowledge every notification in the active drive
+agent-fs comment read --all
+
+# Acknowledge every targeted mention notification in the active drive
+agent-fs comment read --all --kind mention
+
+# Resolve a comment
+agent-fs comment resolve <comment-id>
+```
+
+### Get notified about mentions with a webhook
+
+```bash
+# Create a hook (drive admin). Save the printed whsec_ secret: it is shown once.
+agent-fs webhook create https://hooks.example.com/agent-fs --event comment.mentioned --event comment.created
+
+# Check the receiver answers and verifies the signature
+agent-fs webhook test <webhook-id>
+
+# Mention someone: only --mention fires comment.mentioned (typing @name in the body does not)
+agent-fs comment add docs/spec.md --body "Can you check this?" --mention ben@example.com
+
+# Check the hook's state; re-enable it after a 410 or a failing streak
+agent-fs webhook list
+agent-fs webhook update <webhook-id> --enable
+
+# See why deliveries failed, then send a failed one again
+agent-fs webhook deliveries <webhook-id> --status failed
+agent-fs webhook redeliver <delivery-id>
+```
+
+To react to file writes under one directory instead:
+
+```bash
+agent-fs webhook create https://hooks.example.com/build --event file.changed --path-prefix /site/
+```
+
+Verify each request in the receiver with the `standardwebhooks` npm package:
+
+```ts
+import { Webhook } from "standardwebhooks";
+const event = new Webhook(process.env.AGENT_FS_WEBHOOK_SECRET!).verify(rawBody, headers); // throws if invalid
+```
+
+### Set up a new drive and invite users
+
+```bash
+# Create a shared drive
+agent-fs drive create "team-docs"
+
+# Invite a teammate to that drive only
+agent-fs --drive team-docs drive invite alice@company.com --role editor
+
+# Check current drive context
+agent-fs drive current
+```
+
+### Manage members
+
+```bash
+# List active-drive members without exposing roles
+agent-fs members
+
+# List org members
+agent-fs member list
+
+# List drive members
+agent-fs --drive <driveId> member list
+
+# Invite a user (default drive only)
+agent-fs member invite alice@company.com --role editor
+
+# Invite a user to chosen drives, with a role per drive
+agent-fs member invite alice@company.com --role viewer --to context:editor --to ledger
+
+# Invite someone without an account: prints an accept link to send them
+agent-fs member invite new@company.com --role viewer --to context:editor
+agent-fs member invites
+agent-fs member invite-revoke <invite-id>
+
+# As the invitee (after `agent-fs auth register new@company.com`)
+agent-fs invite accept <accept-link-or-token>
+
+# Give an existing org member access to another drive
+agent-fs --drive ledger member add alice@company.com --role viewer
+
+# Change role
+agent-fs member update-role alice@company.com --role admin
+
+# Remove from org (cascades to all drives)
+agent-fs member remove alice@company.com
+
+# Remove from a specific drive only (keeps org membership)
+agent-fs --drive <driveId> member remove alice@company.com
+```
+
+### Check recent activity
+
+```bash
+# What changed in the last hour?
+agent-fs recent --since 1h
+
+# Recent changes under a specific path
+agent-fs recent docs/ --since 24h --limit 20
+```
+
+### Generate a shareable download link
+
+```bash
+# Default expiry (24 hours)
+agent-fs signed-url docs/report.pdf
+
+# Custom expiry (1 hour)
+agent-fs signed-url docs/report.pdf --expires-in 3600
+
+# Render in the browser instead of downloading (PDF viewer, image tab)
+agent-fs signed-url docs/report.pdf --inline
+
+# JSON output (useful for agents)
+agent-fs signed-url docs/report.pdf --json
+# → { "url": "https://...", "path": "/docs/report.pdf", "expiresIn": 86400, "expiresAt": "2026-03-20T..." }
+```
+
+On an S3/MinIO backend (`kind: "presigned"`) the URL requires no authentication — anyone with the link can download the file until it expires. Access is RBAC-checked only at generation time (viewer-or-better on the drive); after that the URL is a bearer secret. Don't log it or paste it anywhere you wouldn't paste a credential, and prefer the shortest workable `--expires-in`. Signed URLs serve the correct `Content-Type` header based on file extension (e.g., `application/pdf` for `.pdf`, `image/png` for `.png`). By default they also carry `Content-Disposition: attachment`, so opening the link saves the file under its real name. Pass `--inline` (API: `"disposition": "inline"`) when the link will be embedded or opened for viewing, such as a PDF in an `<iframe>`; `<img>` tags ignore the disposition either way.
+
+On a backend without presigned URLs (the local-filesystem backend), `signed-url` does **not** fail — it falls back to an authenticated in-app link (`kind: "app"`, `expiresIn: 0`) of the form `<appUrl>/file/~/<org>/<drive>/<path>`. Unlike a presigned URL this link is **not** a public bearer secret: the daemon's `/raw` route and the web viewer require sign-in, so the recipient must be an authenticated member of the drive. Set `AGENT_FS_APP_URL` (or `appUrl` in config) so the link points at your deployment.
+
+### Share a file with someone who has no account
+
+```bash
+# 24h link, opens as many times as needed
+agent-fs share-create docs/report.md
+
+# Single-use link: the page opens once, then shows "link expired"
+agent-fs share-create docs/report.pdf --one-off
+
+# At most 5 views, valid for 1 hour
+agent-fs share-create docs/report.pdf --max-views 5 --expires-in 3600
+
+# Kill a link (id from share-create), or every link to a file
+agent-fs share-revoke <id>
+agent-fs share-revoke --path docs/report.pdf
+
+# Which links publish this file (its own, plus folder sites that cover it)?
+agent-fs share-list docs/report.md
+# Every link you made in this org, revoked and expired ones too
+agent-fs share-list --mine --include-inactive
+```
+
+`share-create` returns a URL on the **API host** (`https://<server>/share/<token>`), not the web app, so it works for anyone without signing in. Unlike `signed-url` the recipient gets a rendered page: markdown becomes sanitized HTML (frontmatter card, table of contents, callouts, task lists, footnotes, math, mermaid diagrams, highlighted code, light/dark/system theme, view-source and copy), text and code are shown escaped, images, PDF, audio and video are embedded, HTML pages render in a sandboxed frame (with an "Open full page" link), and every other type shows a no-preview card. Each page has the filename, size, expiry and a Download button. SVG files are never rendered, only downloaded.
+
+Things worth knowing before you share:
+
+- **The link is a bearer secret.** Anyone who has it can open it until it expires, is revoked, or runs out of views. It is shown once and only its SHA-256 is stored, so it cannot be recovered; keep the `id` if you may need to revoke it.
+- **It shows the file's current content**, not a snapshot. If the file is edited the link shows the new version; if it is deleted or moved the link shows "file unavailable".
+- **`--one-off` / `--max-views` count page views, and the bytes go with the view.** A view-limited link never serves the file on its URL alone: the page that spent a view gets a private, short-lived credential (up to one hour, never past the link's expiry) that its embed and Download button use. Once the views are used up, nobody holding only the link can fetch the file, and revoking or expiring the link cuts every credential at once. Unlimited links need no credential. Link-preview crawlers (Slack, WhatsApp, ...) and `HEAD` requests do not spend a view.
+- **A shared HTML file is only that file.** It runs in a sandbox with an opaque origin, and relative assets next to it (`chart.png`, `app.js`) return 404. Share the folder instead (below) when the page needs them.
+- **Paths must stay inside the drive.** Every op, on every storage backend, rejects a path with a `.` or `..` segment (either slash direction) or a NUL byte instead of resolving it. `share-create` checks this before it stores the link.
+- **Viewer role is enough to create a link**, and the creator (or a drive admin) can revoke it. Every counted view is written as a `share_viewed` event.
+- Set `AGENT_FS_PUBLIC_URL` when the server sits behind a proxy that does not forward `Host` / `X-Forwarded-*`, so returned links point at the right address.
+
+**MIME types on upload:** `write`, `edit`, `append`, and `revert` automatically detect and set the correct `Content-Type` on S3 objects based on file extension. The content type is also stored in the database and visible in `stat` output via the `contentType` field. `mv` and `cp` keep the source type (a PDF moved to `.txt` is still a PDF), except HTML, SVG and XML, which take the destination extension's type unless it implies the same one. Raw stdin and `--file` uploads preserve bytes exactly. Search indexes valid, indexable UTF-8 text and extracted PDF text.
+
+### Publish an HTML site from a folder
+
+```bash
+# index.html is the site's front page (without one, a lone .html page opens, or else a list of the HTML pages)
+agent-fs write report-site/index.html --content '<!doctype html><link rel="stylesheet" href="style.css"><img src="chart.png"><script src="app.js"></script>'
+agent-fs share-create report-site --expires-in 86400
+# Site: https://<server>/site/<token>/
+
+# Take the site down
+agent-fs share-revoke --path report-site
+```
+
+`share-create` on a folder returns `kind: "site"` and a `/site/<token>/` URL on the API host. Anyone with the link can open it without signing in.
+
+- **`index.html` is the entry point.** `/site/<token>/` serves the folder's `index.html`, and `sub/` serves `sub/index.html`. A folder with no `index.html` opens its only `.html` file (for example `radar.html`), or else lists its HTML pages (never other files or sub-folders). A folder with no HTML page returns 404.
+- **Relative paths work.** `<img src="chart.png">`, `<link href="style.css">`, `<script src="app.js">`, module scripts, `fetch("data.json")` and CSS `url()` all resolve inside the folder. External CDNs and fonts load too.
+- **Pages run in a sandbox with an opaque origin.** Scripts, forms, popups and alerts work, but there is no `localStorage`, `sessionStorage` or cookies.
+- **No view limits.** One page load fetches many files, so `--max-views` and `--one-off` are rejected for folders, and site views record no `share_viewed` events. Use `--expires-in` (max 7 days) and `share-revoke --path <folder>` instead.
+- **A page can read every file under its folder while the link is valid.** Do not put secrets next to HTML you publish, and do not publish a folder whose HTML you did not write. The live UI renders `.html` files the same way, with a 15-minute site link for the file's folder.
+- Each file is served up to 25 MB. Larger files return 413.
+
+### App URL in responses
+
+When `AGENT_FS_APP_URL` is set (e.g., `https://live.agent-fs.dev`), file-related ops automatically include an `appUrl` field pointing to the file in the live web app:
+
+```bash
+AGENT_FS_APP_URL=https://live.agent-fs.dev agent-fs stat docs/report.pdf --json
+# → { ..., "appUrl": "https://live.agent-fs.dev/file/~/org-id/drive-id/docs/report.pdf" }
+```
+
+This applies to any op that returns a `path` or `to` field (write, stat, edit, append, rm, cp, mv, signed-url, etc.).
+
+### Validate your setup
+
+```bash
+agent-fs config validate
+```
+
+### Mount a remote drive from a sandbox
+
+Use `--remote` when the agent is running in a Linux sandbox (sprite, E2B, Hetzner VM, GitHub Actions runner, etc.) that can reach a hosted agent-fs HTTP API but cannot run the full daemon + S3 stack locally.
+
+```bash
+# Linux prereqs (run once per sandbox)
+sudo apt-get install -y fuse3
+sudo chmod 666 /dev/fuse
+sudo ln -sf /proc/mounts /etc/mtab
+echo user_allow_other | sudo tee -a /etc/fuse.conf
+
+# Auth — either env vars or ~/.agent-fs/config.json
+export AGENT_FS_API_URL=https://agent-fs.example.com
+export AGENT_FS_API_KEY=<key>
+
+# Mount — no local daemon needed
+mkdir -p ~/mnt
+agent-fs mount ~/mnt --remote
+
+# Use plain shell verbs against remote content
+ls ~/mnt
+cat ~/mnt/current/docs/spec.md
+echo "edit from sandbox $(date)" > ~/mnt/current/notes.txt
+
+# Unmount
+fusermount3 -u ~/mnt
+```
+
+See `docs/mounting/` for per-environment guides (sprite, E2B, Hetzner).
+
+### Upload limit configuration
+
+Raw HTTP uploads default to 50 MiB. Set `AGENT_FS_MAX_UPLOAD_BYTES` on the server
+(e.g. `104857600` for 100 MiB) and restart the daemon to change the limit. Invalid
+values fall back to 50 MiB. The web UI discovers the limit from `/health`.
+JSON/MCP `write` stays at 10 MiB. FUSE retains a 64 MiB encoded IPC frame ceiling
+including protocol overhead; use HTTP raw uploads for larger files.
+
+An operator can cap each drive with `AGENT_FS_MAX_DRIVE_BYTES`. A write, `cp`,
+`mv` or `revert` past it fails with `QUOTA_EXCEEDED`; ask the operator to raise it.
+
+## Own profile
+
+`agent-fs profile get` reads your profile. `agent-fs profile set --name "Taras"`
+sets your display name. Names are trimmed, 1–100 characters, and shown to anyone
+who can read your comments. Only your authenticated profile can be edited.
+HTTP: `GET /auth/profile`, `PATCH /auth/profile` with `{ "displayName": "Taras" }`
+(or `null` to clear). MCP: `profile-get`, `profile-set` with `displayName`.
+The web account menu has **Edit profile**. Comment responses include
+`authorDisplayName` when set, and notification responses include
+`actorDisplayName`. Every drive member can list member emails and
+display names with `agent-fs members`. Member roles remain admin-only.

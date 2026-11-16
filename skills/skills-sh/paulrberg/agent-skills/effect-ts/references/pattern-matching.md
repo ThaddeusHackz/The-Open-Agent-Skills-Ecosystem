@@ -1,0 +1,22 @@
+# Pattern Matching
+
+When tagged-union branching should be exhaustive, use `Match`. Also use it when a multi-case error handler would
+otherwise become a chain of nested conditionals.
+
+```ts
+const renderError = Match.type<AppError>().pipe(
+  Match.tag("ValidationError", (error) => error.message),
+  Match.tag("NetworkError", () => "Connection failed"),
+  Match.exhaustive,
+);
+```
+
+Use `Match.value` for one local value and `Match.type` when defining a reusable matcher. When every variant must be
+handled, prefer `Match.exhaustive`. Use `Match.orElse` only when the fallback is a real domain case. For a plain object
+of per-tag handlers, `Match.valueTags` and `Match.typeTags` are exhaustive shorthands. From 4.1.0, use
+`Match.literalsExhaustive({ ... })` in a matcher pipeline for string or number literal unions (`@stability unstable`).
+`Match.either` is now `Match.result`.
+
+For a `Data.taggedEnum`, prefer its `$match` helper when generic variant payloads or recursive unions would otherwise
+require assertions. Verify constructor and matcher signatures against the installed `Data` source before changing a
+generic union.

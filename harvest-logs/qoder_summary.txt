@@ -1,0 +1,4 @@
+indexed: 43554
+extracted: 43542
+failed: 12
+failed ids sample: ['official_15iGv8pl', 'official_Y0uTdLXd', 'official_nCrQ1BRN', 'official_lOfOTvn8', 'official_2YS2gerx', 'official_ztkRZBp8', 'official_N4AvWRAV', 'official_EVSyPdsV', 'official_oQTzhDmF', 'official_gfiEoNd8', 'official_FpagPAcp', 'official_jsnP4g3r']

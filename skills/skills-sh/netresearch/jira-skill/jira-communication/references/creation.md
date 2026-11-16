@@ -1,0 +1,72 @@
+<!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
+<!-- SPDX-FileCopyrightText: Netresearch DTT GmbH -->
+
+# Issue Creation — Advanced
+
+## When to load
+
+Load this reference whenever the user wants to create a sub-task (`--parent`), set a custom reporter, attach components, or pass custom-field values on create via `--fields-json`.
+
+## Sub-tasks via `--parent`
+
+```bash
+# --type auto-resolves to the right sub-task issue type for the parent's project
+uv run ${CLAUDE_SKILL_DIR}/scripts/workflow/jira-create.py issue PROJ "Fix flaky test" \
+    --type Bug --parent PROJ-100
+```
+
+When `--parent` is provided, `jira-create.py` resolves the sub-task issue type from the project's issue-type catalog (matching on name, case-insensitive). The parent issue itself is not fetched — resolution is project-scoped: an exact match on the requested type wins, otherwise a substring match against sub-task names (e.g., `Task` → `Sub: Task`), otherwise the sole sub-task type if only one exists.
+
+## Custom reporter
+
+```bash
+uv run ${CLAUDE_SKILL_DIR}/scripts/workflow/jira-create.py issue PROJ "User-reported bug" \
+    --type Bug --reporter jane.doe
+```
+
+Value is the accountId on Cloud, the username on Server/DC. Resolve via `jira-user.py search` (see `fields-and-users.md`).
+
+## Components
+
+```bash
+uv run ${CLAUDE_SKILL_DIR}/scripts/workflow/jira-create.py issue PROJ "Summary" \
+    --type Task --components "Backend,API"
+```
+
+Components must already exist on the project.
+
+## Custom fields on create
+
+```bash
+uv run ${CLAUDE_SKILL_DIR}/scripts/workflow/jira-create.py issue PROJ "Summary" \
+    --type Task \
+    --fields-json '{"customfield_SPRINT": 916, "customfield_EPIC": "PROJ-1940"}'
+```
+
+Sprint ID is an integer, not an array. Epic Link is the epic's issue key as a string.
+
+## Combining flags
+
+`--fields-json` wins over typed flags (`--assignee`, `--priority`, `--labels`, `--reporter`, `--components`) when the same field is set in both — the script merges the JSON payload onto the typed-flag payload (`fields.update(extra_fields)`). Use typed flags for the fields the CLI exposes directly, and reach for `--fields-json` only for the long tail.
+
+## Admin-scope commands: `jira-create.py project` and `tempo-account.py`
+
+```bash
+uv run ${CLAUDE_SKILL_DIR}/scripts/workflow/jira-create.py project PROJ "Project Name" --from-project OTHERPROJ --lead jdoe
+uv run ${CLAUDE_SKILL_DIR}/scripts/workflow/tempo-account.py account link 42 PROJ --default
+```
+
+`--from-project` copies the schemes (permissions, notifications, workflow, issue types), not the project settings or the role members. Three options cover what it leaves out:
+
+- `--category NAME|ID` sets the project category. An unknown name aborts before anything is created and lists the categories that exist.
+- `--assignee-type PROJECT_LEAD|UNASSIGNED` sets the default assignee for new issues.
+- `--copy-roles` adds the groups and users of every project role of `--from-project` that the new project lacks. Members Jira already put there are skipped. It runs before `--bootstrap-issues`, because the bootstrap issue fails with "the default assignee does NOT have ASSIGNABLE permission" while the lead's group is missing from the roles. Role members decide who can see the project, customer groups included: `--dry-run` lists what would be copied, so check it first.
+
+```bash
+uv run ${CLAUDE_SKILL_DIR}/scripts/workflow/jira-create.py project OPSPROJ "OPS Project Name" --from-project PROJ \
+    --lead jdoe --copy-roles --category Support --assignee-type PROJECT_LEAD --bootstrap-issues --dry-run
+```
+
+`tempo-account.py account create` takes `--customer-key` for an account that belongs to a Tempo customer and `--category KEY` for the account category (e.g. `OPS`). Without `--customer-key` the account is created without a customer, open and non-global.
+
+These exercise Jira Administrator / Tempo Administrator rights on whichever PAT is configured. On Jira Server a PAT carries the full permission set of the user who created it, so there is no separate, narrower credential for this — check before running these against an instance where that scope is not expected.

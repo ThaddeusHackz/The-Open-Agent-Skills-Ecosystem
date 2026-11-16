@@ -1,0 +1,22 @@
+{
+  "skills_sh": 18500,
+  "skills_sh_github": 18471,
+  "skills_sh_site": 29,
+  "qoder": 43542,
+  "combined": 62042
+}
+{
+  "skills_sh_repos_processed": 2303,
+  "skills_sh_repos_failed": 50,
+  "skills_sh_repos_failed_retryable": 50,
+  "skills_sh_repos_failed_permanent": 0,
+  "skills_sh_unresolved_skills": 1547,
+  "skills_sh_site_failed": 48,
+  "skills_sh_site_failed_retryable": 48,
+  "skills_sh_site_failed_permanent": 0,
+  "qoder_indexed": 43554,
+  "qoder_extracted": 43542,
+  "qoder_failed": 12,
+  "qoder_failed_retryable": 12,
+  "qoder_failed_permanent": 0
+}

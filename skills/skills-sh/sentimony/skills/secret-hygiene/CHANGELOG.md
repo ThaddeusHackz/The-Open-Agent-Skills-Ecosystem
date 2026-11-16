@@ -1,0 +1,69 @@
+# Changelog
+
+All notable changes to this skill will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Each heading ends with the repository release that shipped the version.
+
+## [0.0.9] - 2026-11-16 - [0.0.114]
+
+### Changed
+
+- Mentions of renamed skills updated (`branch-finish` to `finalize`, `debugging` to `debug`); no other change.
+
+## [0.0.8] - 2026-11-13 - [0.0.110]
+
+### Changed
+
+- Flat layout: reference files moved next to SKILL.md; no content change.
+
+## [0.0.7] - 2026-11-13 - [0.0.105]
+
+### Changed
+
+- Description rewritten as a thesis plus "Use when ..." without "You MUST", at a lower token cost; triggers unchanged.
+
+## [0.0.6] - 2026-11-07 - [0.0.101]
+
+### Changed
+
+- The command-for-the-user step now shows a filled-in `grep` example with a concrete key
+  name and env file path instead of only describing the template.
+
+## [0.0.5] - 2026-11-04 - [0.0.99]
+
+### Changed
+
+- Step 1 now says a project `.env` may be a directory (`.env/.env`, `.env/.env.local`), so
+  both forms are checked before a key is reported missing.
+
+## [0.0.4] - 2026-10-12 - [0.0.82]
+
+### Added
+
+- `LICENSE` (MIT), this `CHANGELOG.md`, and `metadata.version` and `license` in the
+  frontmatter, all removed in 0.0.73. The skill instructions are unchanged.
+
+## [0.0.3] - 2026-10-09 - [0.0.73]
+
+### Removed
+
+- `license` from the frontmatter; the license lives in the skill's `LICENSE` file.
+  The skill instructions are unchanged.
+- `metadata.author` and `metadata.version` from the frontmatter: skills are no longer
+  versioned individually, only repository releases are.
+
+## [0.0.2] - 2026-10-01 - [0.0.61]
+
+### Added
+
+- `agents/openai.yaml` with the Codex display name and short description.
+- `metadata.internal: false` in the frontmatter.
+
+## [0.0.1] - 2026-09-28 - [0.0.58]
+
+### Added
+- Initial release: an advisory procedure for Claude Code and Codex that keeps credential
+  values out of transcripts, tool output, logs, commits, and PR texts while the agent still
+  uses them; a helper contract, a runtime capability matrix, and a project rule snippet.
