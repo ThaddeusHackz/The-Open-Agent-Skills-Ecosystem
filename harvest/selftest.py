@@ -102,11 +102,27 @@ def t_codeload():
     return f"{len(body)} bytes tarball"
 
 
+def t_skills_page_embeds_full_skill():
+    """The rendered page must contain the FULL SKILL.md, not a teaser."""
+    status, html = get("https://www.skills.sh/vercel-labs/skills/find-skills")
+    text = html.decode("utf-8", errors="replace")
+    # A line from deep inside the real SKILL.md (ground truth via GitHub API).
+    probes = [
+        'I found a skill that might help! The &quot;react-best-practices&quot; skill provides',
+        'I found a skill that might help! The \\"react-best-practices\\" skill provides',
+        'I found a skill that might help! The "react-best-practices" skill provides',
+    ]
+    hits = [p for p in probes if p in text]
+    assert status == 200 and hits, "deep SKILL.md line not found in HTML"
+    return f"full content embedded ({len(html)}B html, matched {len(hits)} form(s))"
+
+
 def main():
     check("skills.sh leaderboard API", t_skills_leaderboard)
     check("skills.sh sitemap", t_skills_sitemap)
     check("skills.sh detail API", t_skills_detail_api)
     check("skills.sh skill page html", t_skills_page_html)
+    check("skills.sh page embeds full SKILL.md", t_skills_page_embeds_full_skill)
     check("qoder catalog index", t_qoder_index)
     check("qoder skill detail", t_qoder_detail)
     check("codeload.github.com tarballs", t_codeload)
