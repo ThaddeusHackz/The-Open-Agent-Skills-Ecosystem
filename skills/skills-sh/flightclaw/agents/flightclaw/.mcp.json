@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "flightclaw": {
+      "type": "http",
+      "url": "https://mcp.flightclaw.com/mcp"
+    }
+  }
+}

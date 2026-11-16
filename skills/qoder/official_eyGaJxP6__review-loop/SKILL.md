@@ -1,0 +1,377 @@
+---
+name: review-loop
+description: |
+  自动化代码审查闭环：code review → 验证结论 → 修复真实问题 → 测试 → 重复。
+  当用户提到 review loop、审查循环、自动审查修复、循环审查，或说"帮我审查并修复这个分支"时触发。
+allowed-tools: Read, Grep, Glob, Bash, Write, Edit
+---
+
+# 自动化代码审查循环
+
+你的任务是执行一个"审查 → 验证 → 修复 → 测试"的自动化循环，持续改进代码质量。
+
+**核心价值**：AI review 工具会产生误报，直接照单全收会引入不必要的改动。通过 review + 二次验证的双重过滤，只修复真正有价值的问题。
+
+**架构**：code-review 和 check-comment 在独立 subagent（`context: fork`）中运行，主对话仅保留编排状态和简要摘要，避免中间产出的 token 累积。
+
+**当前 Session**: `${CLAUDE_SESSION_ID}`
+
+---
+
+## 一、整体框架：五阶段闭环
+
+```
+┌─────────────────────────────────────────────────────┐
+│  阶段0: 上下文初始化                                  │
+│  → 获取 session ID，提取需求，初始化审查目录          │
+└─────────────────┬───────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────┐
+│  阶段1: Code Review                                  │
+│  → 激活 code-review 技能，产出中文审查报告            │
+└─────────────────┬───────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────┐
+│  阶段2: 验证 Review 结论                             │
+│  → 激活 check-comment 技能，过滤误报和过度建议        │
+└─────────────────┬───────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────┐
+│  阶段3: 执行修复                                     │
+│  → 只修复"采纳"或"部分采纳"的问题，小而精确           │
+└─────────────────┬───────────────────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────────────────┐
+│  阶段4: 测试验证                                     │
+│  → make test，通过则提交，更新上下文，进入下一轮       │
+│    否则修复后重测                                    │
+└─────────────────┬───────────────────────────────────┘
+                  │
+                  └──────► 回到阶段1（直到满足终止条件）
+```
+
+---
+
+## 零、阶段 0：上下文初始化（准备层）
+
+在开始审查循环之前，完成所有准备工作。
+
+### 0.1 初始化审查目录
+
+```bash
+mkdir -p ".claude/plugins-data/code-quality/review-loop/${CLAUDE_SESSION_ID}"
+```
+
+### 0.2 提取需求上下文
+
+自动从以下来源提取需求（按优先级）：
+
+| 优先级 | 来源 | 获取方式 |
+|--------|------|----------|
+| 1 | PR description | `gh pr view --json body` |
+| 2 | 关联 issue | 从 PR body 提取 `Fixes #N` / `Closes #N`，然后 `gh issue view N` |
+| 3 | Commit messages | `git log main..HEAD --format="%s%n%b"` |
+| 4 | 无可用需求 | 跳过，告知用户可手动提供 |
+
+**用户也可直接提供需求**——如果用户在启动时给出了需求描述，直接使用。
+
+### 0.3 写入 context.json
+
+```json
+{
+  "session_id": "{session-id}",
+  "source": "PR #42 description / commit messages / 手动提供",
+  "requirements": [
+    {"text": "支持批量删除用户", "status": "pending"},
+    {"text": "删除前需要确认弹窗", "status": "pending"},
+    {"text": "记录操作审计日志", "status": "pending"}
+  ],
+  "scope_note": "可选：补充说明（如只处理前端，后端由另一个 PR 完成）",
+  "rounds_completed": 0
+}
+```
+
+写入路径：`.claude/plugins-data/code-quality/review-loop/${CLAUDE_SESSION_ID}/context.json`
+
+**需求是参考信号，不是硬性标准。** 用于理解代码意图、检查覆盖、避免误报。不因需求否定明显更优的实现。
+
+---
+
+## 二、第一阶段：Code Review（发现层）
+
+### 2.1 执行步骤
+
+调用 `/code-review ${CLAUDE_SESSION_ID}`，对当前分支相较于 main 分支的变更进行深度审查。
+
+审查在独立 subagent 中运行，完整报告保存至 `.claude/plugins-data/code-quality/review-loop/${CLAUDE_SESSION_ID}/round-{N}-review.md`，主对话仅收到简要摘要。
+
+```bash
+# Subagent 会自动执行以下命令，此处仅供参考
+git diff main...HEAD --stat
+git diff main...HEAD --name-only
+```
+
+### 2.2 输出说明
+
+subagent 返回的摘要包含：状态、风险等级、发现的问题数量。完整报告已保存至文件。
+
+如需查看完整报告，读取 `.claude/plugins-data/code-quality/review-loop/${CLAUDE_SESSION_ID}/` 下最新的 `round-*-review.md`。
+
+---
+
+## 三、第二阶段：验证 Review 结论（过滤层）
+
+### 3.1 执行步骤
+
+调用 `/check-comment ${CLAUDE_SESSION_ID}`，验证阶段 1 的审查报告。
+
+check-comment 在独立 subagent 中运行，自动找到最新的 review 文件进行验证，结论保存至 `.claude/plugins-data/code-quality/review-loop/${CLAUDE_SESSION_ID}/round-{N}-verdict.md`，主对话仅收到简要摘要。
+
+### 3.2 核心目的
+
+过滤掉 review 中的误报和过度建议。对每个问题独立判断：
+
+| 判断维度 | 说明 |
+|---------|------|
+| 问题真实性 | 读取实际代码，确认问题是否真实存在 |
+| 严重程度 | 评估是"必须修复"、"建议修复"还是"可忽略" |
+| 修复合理性 | 修复建议是否可行，是否有更好的方案 |
+| 需求准确性 | 如果报告涉及需求覆盖判断，读取 context.json 验证结论是否准确 |
+
+### 3.3 输出格式
+
+对每个问题标注处理意见：
+
+| 标记 | 含义 | 示例 |
+|-----|------|------|
+| 采纳 | 问题真实，建议合理，立即修复 | 变量遮蔽风险 |
+| 部分采纳 | 问题真实但建议需调整 | 添加日志而非报错 |
+| 不采纳 | 误报或优先级过低 | 合理的防御性编程 |
+
+将结论保存至 `.claude/plugins-data/code-quality/review-loop/{session-id}/round-{N}-verdict.md`（由 subagent 自动完成）。
+
+主对话仅收到简要摘要（采纳/不采纳数量）。如需查看完整结论，读取该文件。
+
+---
+
+## 四、第三阶段：执行修复（执行层）
+
+### 4.1 获取修复清单
+
+读取 `.claude/plugins-data/code-quality/review-loop/${CLAUDE_SESSION_ID}/` 下最新的 `round-*-verdict.md`，获取标记为"采纳"或"部分采纳"的问题列表。
+
+### 4.2 修复原则
+
+✅ **好的修复**：
+- 小而精确，不做超出问题范围的改动
+- 如果 check-comment 给出了更好的方案，优先使用
+- 修复后运行类型检查
+
+❌ **避免的修复**：
+- 照单全收所有 review 建议
+- 在修复过程中引入额外改动
+- 跳过测试验证
+
+如果阶段 2 判定所有问题都"不采纳"，直接进入终止判断。
+
+---
+
+## 五、第四阶段：测试验证（验证层）
+
+### 5.1 执行测试
+
+使用子代理运行代码检查确保修复没有破坏现有功能:
+
+```bash
+make check  # 后端变动执行
+make ui-check  # 前端变动执行
+```
+
+### 5.2 结果处理
+
+| 测试结果 | 处理方式 |
+|---------|---------|
+| 全部通过 | 提交 commit，更新 context.json 中的需求状态，进入下一轮循环 |
+| 部分失败 | 分析失败原因，修复后重新运行直到通过 |
+
+**每轮结束后更新 context.json：**
+- 更新 `rounds_completed` 计数
+- 根据审查结果更新每个需求的 `status`（`pending` → `covered` / `missing`）
+- 这样新一轮的 code-review 能看到上一轮的进展，避免重复报告
+
+**提交格式**：
+```bash
+git commit -m "fix(scope): address review findings from Round N
+
+- [修复内容1]
+- [修复内容2]
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+## 六、终止条件
+
+循环在以下任一条件满足时终止：
+
+| 条件 | 说明 |
+|-----|------|
+| 1. 无需修复 | 阶段 2 判定所有问题都是误报或不值得修复，**且**需求无 missing |
+| 2. 达到轮数上限 | 已完成 3 轮循环（防止无限循环） |
+| 3. 连续误报 | 连续两轮 review 发现同类问题且都被判定为不采纳 |
+
+**注意**：如果 context.json 中仍有 `status: "missing"` 的需求，不触发条件 1——需求没做完就停是最大的浪费。
+
+---
+
+## 七、每轮输出（实践向）
+
+每轮循环结束时，使用以下格式简要汇报：
+
+```markdown
+## 第 N 轮循环完成
+
+- Review 发现: X 个问题（Y个主要 + Z个次要）
+- Check-comment 采纳: A 个
+- 实际修复: [简要描述，如"变量重命名、gitignore"]
+- 测试: ✅ XXX passed / ❌ 失败原因
+```
+
+---
+
+## 八、最终输出（总结层）
+
+循环结束后，给出一个**解释为主、代码为辅**的总结。
+
+### 8.1 核心原则
+
+| 原则 | 说明 | 示例 |
+|-----|------|------|
+| 先说"为什么" | 解释问题的本质 | **本质**: 通过命名区隔"原始配置"与"生效配置" |
+| 再说"是什么" | 描述修复的具体内容 | 重命名为 `effective_target_locales` |
+| 代码仅作说明 | 不罗列完整 diff | 仅展示关键行对比 |
+
+### 8.2 总结结构
+
+```markdown
+## 🏁 Review Loop 完成 - 最终总结
+
+### 执行统计
+| 轮次 | Review 发现 | 采纳 | 实际修复 | 测试 |
+|-----|-----------|------|---------|------|
+| 1 | X 个 | A 个 | [简要] | ✅ |
+| 2 | Y 个 | B 个 | [简要] | ✅ |
+| 3 | Z 个 | C 个 | [简要] | ✅ |
+
+### 累计修复内容
+
+1. **[问题标题]** - [本质说明]
+   - **本质**: [为什么这样修复，解决了什么根本问题]
+
+2. **[问题标题]** - [本质说明]
+   - **本质**: [...]
+
+### 当前代码状态
+- ✅ XXX 个测试全部通过
+- ✅ N 个 commit 完成代码质量改进
+- ✅ 核心功能正确：[简要确认]
+
+### 不采纳的问题类型
+- [列出未采纳的问题类别及原因]
+
+### 整体评价
+[总结本轮修复的核心思路和价值]
+```
+
+### 8.3 写作对比
+
+❌ **不好的方式**：
+```
+- 修复了 orchestrator.py 第 333-335 行，将 target_locales 改为 effective_target_locales
+- 移除了 grpc_client.py 第 104 行的 hasattr 检查
+```
+
+✅ **好的方式**：
+```
+1. **变量命名规避遮蔽风险** - 通过命名区隔配置来源
+   **本质**: "原始配置"与"生效配置"命名分离，降低后续误用风险
+
+2. **移除冗余防御检查** - 让问题显式化
+   **本质**: 静默失败 vs 显式报错，选择快速定位问题
+```
+
+---
+
+## 九、实操 Checklist
+
+### 结构检查
+☐ 五阶段闭环清晰（初始化 → 审查 → 验证 → 修复 → 测试）
+☐ 阶段 0 创建审查目录并写入 context.json
+☐ 阶段 1/2 通过 `/code-review` 和 `/check-comment` 在 subagent 中执行（`context: fork`），仅摘要返回主对话
+☐ 终止条件明确（3轮上限 / 无需修复且需求无 missing / 连续误报）
+
+### 执行检查
+☐ 需求上下文已持久化至 `.claude/plugins-data/code-quality/review-loop/${CLAUDE_SESSION_ID}/context.json`
+☐ code-review / check-comment 在 subagent 中执行，报告和结论已持久化至对应 round 文件
+☐ review-loop 通过读取 verdict 文件获取修复清单
+☐ 每轮结束后更新 context.json 中的需求状态
+☐ 每轮输出包含：发现数、采纳数、修复内容、测试结果
+☐ 修复遵循"小而精确"原则
+☐ 测试通过后才提交 commit
+
+### 总结检查
+☐ 以解释为主，代码为辅
+☐ 每个修复说明"本质"是什么
+☐ 统计表格完整（轮次 × 发现 × 采纳 × 测试）
+
+---
+
+## 十、针对你的场景的实战建议
+
+### 10.1 何时使用 Review Loop
+
+✅ **适合场景**：
+- 功能开发完成，准备合并到 main 前的最后检查
+- 重构后验证没有引入问题
+- 希望系统性地提升代码质量
+
+❌ **不适合场景**：
+- 紧急 hotfix（时间成本过高）
+- 纯文档变更（无需代码审查）
+- 实验性/临时代码分支
+
+### 10.2 与其他技能的配合
+
+| 技能 | 何时在 Review Loop 中使用 | 上下文传递 |
+|-----|------------------------|-----------|
+| `code-review` | 阶段1，生成审查报告（`context: fork`） | 从 `$ARGUMENTS` 获取 session ID，自行读取 `context.json` |
+| `check-comment` | 阶段2，验证报告结论（`context: fork`） | 从 `$ARGUMENTS` 获取 session ID，自行读取 review 报告 + `context.json` |
+| `simplify` | 修复后运行，检查代码质量 | — |
+
+### 10.3 文件持久化说明
+
+所有审查产物存储在 `.claude/plugins-data/code-quality/review-loop/${CLAUDE_SESSION_ID}/` 下：
+
+```
+.claude/plugins-data/code-quality/review-loop/{session-id}/
+├── context.json              # 需求上下文 + 状态追踪
+├── round-1-review.md         # 第 1 轮审查报告
+├── round-1-verdict.md        # 第 1 轮验证结论
+├── round-2-review.md         # 第 2 轮...
+├── round-2-verdict.md
+└── summary-{timestamp}.md    # 最终总结（不覆盖）
+```
+
+- 建议将 `.claude/plugins-data/code-quality/review-loop/` 加入 `.gitignore`
+- 清理与否由用户自行决定
+
+---
+
+**参考资源**：
+- `templates/round_summary.md` — 每轮输出模板
+- `templates/final_summary.md` — 最终总结模板

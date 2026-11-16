@@ -1,0 +1,170 @@
+<!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
+<!-- SPDX-FileCopyrightText: Netresearch DTT GmbH -->
+
+# Issue Editing — Advanced
+
+## When to load
+
+Load this reference whenever the user wants to set `--fields-json`, set a custom `--reporter`, delete an issue (especially with sub-tasks), attempt an unsupported cross-project move via CLI (see below), or change any field that is not assignee, priority, or labels.
+
+## `--description` for plain description edits
+
+For a plain description rewrite, use the typed flag — it avoids JSON-escaping the body:
+
+```bash
+uv run ${CLAUDE_SKILL_DIR}/scripts/core/jira-issue.py update PROJ-123 \
+    --description "Rewritten description"
+
+# Pipe a longer body from a file
+cat body.txt | uv run ${CLAUDE_SKILL_DIR}/scripts/core/jira-issue.py update PROJ-123 --description -
+```
+
+The body is Jira wiki markup (see the `jira-syntax` skill).
+
+## Clearing a field
+
+Typed flags cannot clear a field — `--assignee ""` contributes nothing and the
+CLI reports `✗ No fields specified for update`, so the field keeps its old
+value and nothing signals that the clear was a no-op. Pass an explicit `null`
+via `--fields-json`:
+
+```bash
+# Unassign (back to the team queue)
+uv run ${CLAUDE_SKILL_DIR}/scripts/core/jira-issue.py update PROJ-123 \
+    --fields-json '{"assignee": null}'
+
+# Clear a due date and a custom user-picker field in one call
+uv run ${CLAUDE_SKILL_DIR}/scripts/core/jira-issue.py update PROJ-123 \
+    --fields-json '{"duedate": null, "customfield_12608": null}'
+```
+
+Not every field can be cleared this way — the field must be on the issue's edit
+screen. Assignee on a transition-only screen needs the dedicated
+`/rest/api/2/issue/KEY/assignee` endpoint, and `parent` cannot be cleared at all
+(see the sub-task note below).
+
+## `--fields-json` for custom fields and structured payloads
+
+`jira-issue.py update` accepts a raw JSON object to set any field the Jira REST API exposes — reach for it when the typed flags don't cover the field. There is **no** `--field` flag; `--fields-json` is the only generic setter:
+
+```bash
+# Custom fields (Sprint ID as integer, Epic Link as issue key)
+uv run ${CLAUDE_SKILL_DIR}/scripts/core/jira-issue.py update PROJ-123 \
+    --fields-json '{"customfield_SPRINT": 916, "customfield_EPIC": "PROJ-1940"}'
+
+# Combine with typed flags — `--fields-json` wins on conflict
+uv run ${CLAUDE_SKILL_DIR}/scripts/core/jira-issue.py update PROJ-123 \
+    --priority Critical \
+    --fields-json '{"labels": ["review", "urgent"]}'
+```
+
+The script merges `--fields-json` onto the typed-flag payload (`update_fields.update(extra_fields)`), so any key present in both is taken from `--fields-json`. Use typed flags for fields the CLI exposes directly, and reach for `--fields-json` only for the long tail.
+
+Look up custom field IDs with `jira-fields.py` — see `fields-and-users.md`.
+
+**Epic Link is edit-screen-only.** On Jira Server/DC the Epic Link field (look it up with `jira-fields.py search epic`, e.g. `customfield_10580`) is usually **not on the create screen** — passing it to `jira-create.py … --fields-json` fails with *"Field … cannot be set. It is not on the appropriate screen, or unknown."* Create the issue first, then set the epic with `jira-issue.py update KEY --fields-json '{"customfield_10580": "PROJ-1"}'`.
+
+### Multi-line wiki-markup bodies (Deployment Information, UAT fields, …)
+
+`--fields-json` takes a raw JSON string with no `-`/stdin support (unlike `--description`), so hand-escaping a multi-line wiki-markup body — headers, `{{code}}` spans, embedded newlines — is error-prone. Build the payload with `jq` instead of inline JSON:
+
+```bash
+jq -Rs --arg fid "customfield_11488" '{($fid): .}' body.txt > payload.json
+uv run ${CLAUDE_SKILL_DIR}/scripts/core/jira-issue.py update PROJ-123 --fields-json "$(cat payload.json)"
+```
+
+`jq -Rs` reads the file as one raw string, preserving newlines, and `--arg fid` keeps the field ID out of the JSON body — no manual quote/newline escaping.
+
+## Array-valued fields: replace vs incremental updates
+
+Every array-valued field — `labels`, `fixVersions`, `versions` (Affects Version/s), `components` — is **replaced wholesale** by whatever you send. `jira-issue.py update` has no append path: it always sends a plain `fields` set (`update_fields.update(extra_fields)` → `update_issue_field`). Jira's REST API *does* have an append verb — `{"update": {"fixVersions": [{"add": {"id": "…"}}]}}` — but the scripts do not expose it, so a payload carrying one entry leaves the issue with exactly that one entry.
+
+### Labels — the one field with incremental flags
+
+`jira-issue.py update` supports three modes for labels:
+
+- `--labels a,b,c` replaces the full label set.
+- `--add-label` / `--remove-label` incrementally update labels without wiping unrelated tags.
+- Do **not** combine `--labels` with `--add-label` / `--remove-label` in one invocation.
+
+Each `--add-label` / `--remove-label` may be repeated and may contain comma-separated values. Matching for removals is **case-insensitive**, and additions **dedupe case-insensitively** while preserving the casing already stored in Jira when possible.
+
+```bash
+uv run ${CLAUDE_SKILL_DIR}/scripts/core/jira-issue.py update PROJ-123 \
+  --add-label backend --add-label urgent,frontend --remove-label stale
+```
+
+### `fixVersions` / `versions` / `components` — read, extend, send whole
+
+These have **no** `--add-*` / `--remove-*` equivalent; they are only reachable through `--fields-json`, which is a plain replace. Adding one version therefore means sending the existing entries *plus* the new one:
+
+```bash
+# Wrong — clobbers every fix version already on the issue, silently and with ✓ exit 0
+uv run ${CLAUDE_SKILL_DIR}/scripts/core/jira-issue.py update PROJ-123 \
+    --fields-json '{"fixVersions": [{"id": "10123"}]}'
+
+# Correct — read the current ids first
+uv run ${CLAUDE_SKILL_DIR}/scripts/core/jira-issue.py --json get PROJ-123 --fields fixVersions \
+  | jq -r '.fields.fixVersions[].id'
+# → 10098
+
+# …then send the union
+uv run ${CLAUDE_SKILL_DIR}/scripts/core/jira-issue.py update PROJ-123 \
+    --fields-json '{"fixVersions": [{"id": "10098"}, {"id": "10123"}]}'
+```
+
+The failure is silent — the call reports `✓` because the write succeeded; only the *intent* (add, not replace) was lost. Re-read the field afterwards when it matters.
+
+`{"name": "1.4.0"}` works in place of `{"id": ...}`, but IDs survive a version rename and names do not (see `versions.md`). To move many issues onto a different version at once, prefer `jira-version.py merge` / `delete --move-fix-to` over per-issue `--fields-json` edits.
+
+## Setting a custom reporter
+
+`jira-issue.py update` has no `--reporter` flag; the reporter on an existing issue is changed through `--fields-json`:
+
+```bash
+# Cloud (accountId) or Server/DC (name) — both go through --fields-json
+uv run ${CLAUDE_SKILL_DIR}/scripts/core/jira-issue.py update PROJ-123 \
+    --fields-json '{"reporter": {"name": "jane.doe"}}'
+```
+
+On Jira Cloud, use `{"reporter": {"accountId": "..."}}` instead. The create-time shortcut is the typed `--reporter` flag on `jira-create.py` — see `creation.md`.
+
+## Deleting issues
+
+```bash
+# Always preview first
+uv run ${CLAUDE_SKILL_DIR}/scripts/core/jira-issue.py delete PROJ-123 --dry-run
+
+# Real delete
+uv run ${CLAUDE_SKILL_DIR}/scripts/core/jira-issue.py delete PROJ-123
+
+# Parent with sub-tasks — the API rejects it unless you opt in
+uv run ${CLAUDE_SKILL_DIR}/scripts/core/jira-issue.py delete PROJ-100 --delete-subtasks
+```
+
+`--delete-subtasks` cascades the delete. The script refuses without it when sub-tasks exist.
+
+## Moving an issue between projects
+
+Cross-project moves are **not implemented** in `jira-move.py` because some Jira Server/DC versions accept `project` edits via the standard issue endpoint without actually moving the issue (silent partial updates / corruption risk). The command **refuses** cross-project targets for both real execution and `--dry-run`.
+
+Use the Jira UI **Move** action (or a bulk-move workflow your admins provide) for cross-project relocation.
+
+Within the **same** project, `jira-move.py` can change issue type:
+
+```bash
+# Preview a same-project type change
+uv run ${CLAUDE_SKILL_DIR}/scripts/workflow/jira-move.py issue PROJ-100 PROJ --issue-type Task --dry-run
+
+# Execute the type change (issue key stays the same)
+uv run ${CLAUDE_SKILL_DIR}/scripts/workflow/jira-move.py issue PROJ-100 PROJ --issue-type Task
+```
+
+A type change with `jira-move.py` works between two standard types (or two sub-task types), and only when both types run the **same workflow**. The REST edit changes the type without migrating the issue's workflow, so an issue switched to a type with another workflow keeps the old one while the scheme names the new one; when the new workflow lacks the current status, Jira's own Move then refuses the issue (*"incorrectly associated with the status"*) and add-ons that look up the workflow step fail on every view.
+
+`jira-move.py` therefore checks twice:
+
+- **Before the change** it refuses when the target type lacks the current status, or when the project's workflow scheme maps the two types to different workflows. The scheme is readable for project admins. Without that view, or when the scheme does not name one of the types, it compares the two types' status sets instead and refuses different sets. Equal sets are refused as well, because two different workflows can share every status and the check after the change cannot tell them apart either. The refusal names why the scheme could not be used: missing rights (HTTP 401/403), a failed read with its HTTP status or error, or a scheme that does not name both types. Where the rights are missing, run the command as a project admin; where the read failed, retry; in every case pass `--assume-same-workflow` when you know both types run the same workflow. An issue whose transitions already lead to statuses its own type's workflow lacks was left on another workflow by an earlier REST change. For such an issue the command allows only a change to a type that has every status the issue offers, which sets back the type of the workflow it runs, and refuses any other. The other repair: walk its transitions to a status both workflows have, then use Move; Jira's Move refuses the issue while it sits in a status the scheme's workflow lacks.
+- **After the change** it reads the issue's transitions, which come from the workflow the issue actually runs. When the current status or a transition target is missing from the new type's statuses, the issue kept its old workflow: the command sets the old type back and exits 1. When the issue or its transitions cannot be read back, including an expired session or a CAPTCHA challenge on that read, it warns and keeps the change. When the read-back of the issue does not show the new type (it failed, or its body is empty or lacks the type), the new type is unverified too, because Jira can answer 204 and keep the old type: the command then prints `Type change sent … (unverified)`, and `--json` carries `"type_verified": false`.
+
+For a type with another workflow use the Jira UI's **Move**, which maps the status. Do not change the type to reach a field the current type's screen lacks: write the content where the project's conventions say instead. **Converting a sub-task ↔ a standard issue cannot be done via the API.** `jira-move.py … --issue-type Task` on a *sub-task* fails with *"Issue type N is not a sub-task but a parent is specified"* — the parent can't be cleared through the edit endpoint, and `jira-issue.py update --fields-json '{"parent": null, ...}'` also fails. It is a **UI-only** operation: open the issue → **More → Convert to Issue** (this is *not* the "Move" action). After converting in the UI the issue becomes a standard type and can take an Epic Link (above).

@@ -1,0 +1,225 @@
+---
+name: OpenClerk
+description: Use installed openclerk document and openclerk retrieval JSON. With explicit user content or runner-supported public-source context, let the agent/OpenClerk propose path, title, body preview, tags, fields, and next approved request; do not write before approval. Bootstrap no-tools rule - if required fields, content/body, or update target are missing and no faithful candidate, duplicate-risk, artifact, or public-link placement proposal can be formed; if numeric limit is negative; or if bypass is requested with SQLite, raw vault/file/repo inspection, HTTP/MCP, legacy/source-built paths, unsupported transports, backend variants, module-cache inspection, rg, find, ls, external OCR, browser automation, local file reads, or opaque artifact parsing, this description is complete. For those invalid cases only, do not open this skill file, run commands, use tools, or call the runner; respond with exactly one no-tools assistant answer naming the missing/invalid fields or unsupported workflow, and ask for missing fields.
+license: MIT
+compatibility: Requires local filesystem access and an installed openclerk binary on PATH.
+---
+
+# OpenClerk
+
+Use this skill for routine local OpenClerk knowledge-plane tasks. The
+production interface is AgentOps: this Skills-compatible router plus the
+installed JSON runner.
+
+```bash
+openclerk capabilities
+openclerk document
+openclerk retrieval
+```
+
+`SKILL.md` is an activation, routing, and safety contract, not the durable home
+for long workflow recipes. Once a request is safely inside the runner contract,
+use agent autonomy with runner JSON results, runner rejections, returned
+`agent_handoff`, `openclerk capabilities` for static surface discovery, and
+compact runner help. Repeated exact JSON, command ordering, or
+scenario-specific choreography is product UX evidence for a runner
+workflow-action comparison, not a reason to expand this file.
+
+## Action Index
+
+Prefer a promoted workflow action over manual primitive choreography when it
+matches the request:
+
+- Source-linked synthesis create/update, including disposable validation
+  synthesis: document `compile_synthesis` once with user-provided target,
+  title, source refs, and requested claims as `body_facts` or body text; then
+  answer from `compile_synthesis.agent_handoff`.
+- Disposable validation synthesis: document `validation_synthesis_report` once with `validation_synthesis.disposable_validation=true` when the runner is bound to a routine UX disposable vault copy; answer from its `agent_handoff`.
+- Representative source discovery: retrieval `source_discovery_report` once;
+  answer from `source_discovery.agent_handoff`, using categories/counts instead
+  of private paths, titles, snippets, ids, or raw JSON for private telemetry.
+- Source URL placement before durable fetch/write: document
+  `ingest_source_url` with `mode: "plan"`, then answer from
+  `source_placement_plan.agent_handoff`.
+- Harness-supplied web search planning: document `web_search_plan`, then answer
+  from `web_search_plan.agent_handoff`; approved fetch/write remains
+  `ingest_source_url`.
+- Artifact candidate intake and explicit local OCR review: document
+  `artifact_candidate_plan`, then answer from `artifact_candidate_plan.agent_handoff`;
+  approved durable writes remain `create_document` or `ingest_source_url`.
+- Source-sensitive audit explain/repair: retrieval
+  `{"action":"source_audit_report","source_audit":{"query":"...","target_path":"...","mode":"explain|repair_existing","conflict_query":"...","limit":10}}`,
+  then answer from `source_audit.agent_handoff`.
+- Records, decisions, provenance, and projection evidence bundles: retrieval
+  `evidence_bundle_report` once; answer from `evidence_bundle.agent_handoff`.
+- Decision-like record lookup across formal decisions, records, search,
+  provenance, and projection freshness: retrieval `decision_lookup_report`
+  once; answer from `decision_lookup.agent_handoff`.
+- Duplicate update-versus-new clarification: retrieval
+  `duplicate_candidate_report`, then answer from
+  `duplicate_candidate.agent_handoff`.
+- Workflow surface selection: retrieval `workflow_guide_report`, then use
+  `workflow_guide.agent_handoff` to choose the next runner action.
+- Routine read-only memory/router recall reports: retrieval
+  `memory_router_recall_report`, then answer from
+  `memory_router_recall.agent_handoff` or returned evidence.
+- Structured data and non-document canonical-store decision support: retrieval
+  `structured_store_report`, then answer from `structured_store.agent_handoff`;
+  do not claim independent tables, external connectors, or structured writes.
+- Hybrid/vector decision support: retrieval `hybrid_retrieval_report`, then
+  answer from `hybrid_retrieval.agent_handoff`; do not claim vector ranking.
+- Explicit local semantic retrieval: retrieval `semantic_search`, then answer
+  from hits and handoff; requires explicit semantic/vector recall, loopback
+  Ollama, no Gemini fallback, and unchanged default `search`.
+
+Use lower-level primitives for explicit primitive requests, advanced/manual
+cases, unsupported workflow-action inputs, and follow-up inspection after a
+runner rejection. For promoted workflow actions, answer from the first
+successful returned handoff; do not repeat the same action or inspect
+follow-up primitives unless the result rejects or the user asks for more.
+
+## Core Guardrails
+
+- Answer routine OpenClerk requests only from runner JSON results. Use the
+  configured environment; pass `--db` only when the user explicitly names a
+  dataset.
+- When the user says runner and data path are configured, skip setup checks
+  (`command -v`, `--version`, `resolve_paths`, `capabilities`, skill path).
+- Treat every runner path as vault-relative, such as
+  `notes/projects/example.md`, `sources/example.md`, or `synthesis/`. Never
+  use storage roots, machine-absolute paths, `.openclerk-eval/vault`, or
+  OS-specific backslash/drive paths in runner JSON or committed OpenClerk
+  document paths.
+- Do not inspect source files, generated artifacts, backend variants,
+  module-cache docs, SQLite, vault files, or `.openclerk-eval/vault` directly
+  for routine tasks. Do not use repo search, `rg --files`, `find`, `ls`,
+  `openclerk --help`, HTTP/MCP, legacy/source-built paths, unsupported
+  transports, browser automation, external OCR, PPTX parsing,
+  email/chat/form/bundle parsing, direct local file reads, or external
+  acquisition tools as substitutes for runner JSON.
+- Parallelize runner commands only for documented safe reads:
+  `resolve_paths`, `list_documents`, `get_document`, `inspect_layout`,
+  retrieval read actions, `source_audit_report` with `mode: "explain"`, and
+  `audit_contradictions` with `mode: "plan_only"`. Sequence all writes,
+  including `init`, create/ingest/append/replace document actions,
+  `compile_synthesis`, `source_audit_report` with `mode: "repair_existing"`,
+  and `audit_contradictions` with `mode: "repair_existing"`.
+- Durable writes require explicit approval when the agent is proposing a
+  candidate path, title, body, source placement, synthesis placement, or
+  update-versus-new choice. Public read, fetch, or inspect permission is not
+  durable-write approval.
+
+## No-Tools Before Runners
+
+Before runners, answer exactly once with no tools when missing content, missing
+update target, missing retrieval/source/video fields, low confidence, a
+negative numeric limit, or a Core Guardrails bypass makes runner-backed
+planning impossible. Ask for missing content or target fields by name, or
+reject the invalid/unsupported workflow and point back to the OpenClerk runner
+contract.
+
+For strict document creation without enough content or context for
+proposal-first planning, answer: missing `path`, `title`, and `body`; please
+provide them. Do not call `validate`, `create_document`, or discovery.
+
+Proposal-first defaults are valid runner-backed work when explicit user content
+or runner-supported public-source context is present:
+
+- document create/validate with omitted path, title, tags, fields, or final body
+  may propose a faithful candidate before any write; explicit user values win
+- artifact and note intake should use `artifact_candidate_plan` when omitted
+  path/title/body preview/tags/fields, confidence, duplicates, or create/ingest
+  handoff need one runner-owned plan
+- duplicate-risk checks may use runner-visible retrieval/list/get/provenance
+  evidence before choosing update versus new
+- public-link placement may propose source and synthesis paths before durable
+  fetch or write
+
+Opaque screenshots, images, slide decks or PPTX files, email archives, exported
+chats, forms, and bundles are unsupported as opaque input unless the user pasted
+preservable text/body content or requested runner-backed OCR review for a local
+image/PDF path. Do not claim parser truth, external OCR results, hidden file
+inspection, attachment contents, or bundle contents not returned by the runner.
+
+## Workflow Policies
+
+Keep workflow-specific procedure out of this skill. Apply these compact
+policies and let runner results drive the answer:
+
+- Candidate documents and artifacts: preserve explicit user path/title/body/type/tag/field/naming instructions; choose omitted path, title, body preview, tags, and fields from explicit content or runner-supported public-source context by default; use `artifact_candidate_plan` when tags, fields, confidence, duplicate status, or create/ingest handoff are relevant; otherwise validate with `openclerk document` before presenting a candidate; show `Path:`, `Title:`, and `Body preview:`; state no document was created; ask for approval before durable writes; for note-like candidates without an explicit path, use `notes/candidates/<slug-from-title>.md`, derive a concise singular noun phrase title, and Include `type: note` frontmatter plus a `# <Title>` heading.
+- OCR artifact review: text-extractable documents do not need OCR; use OCR review only for common images, scan-only PDFs, or PDFs whose embedded text is bad or partial, and treat returned OCR text as candidate evidence until durable-write approval.
+- Duplicate checks: when duplicate risk is requested or plausible, use runner-visible evidence before validating or writing; report the likely target, evidence inspected, and that no document was created or updated; ask whether to update the existing target or create a confirmed new path.
+- Public URL/source intake: use `web_search_plan` for supplied search results and `ingest_source_url` for HTTP/HTTPS PDF and public web sources. Do not fetch URLs with browser, HTTP, filesystem, or other non-runner tools; when placement is missing, propose source/synthesis paths and ask for approval before durable fetch or write.
+- Video/YouTube source intake: use `ingest_video_url` only with user-supplied transcript text and provenance; do not acquire media or transcripts externally.
+- Document lifecycle review, rollback, restore, and semantic diff: stay inside `openclerk document` and `openclerk retrieval`. Use `git_lifecycle_report` only for local Git status/history/checkpoints; it is storage history, not semantic provenance, and checkpoint mode needs explicit runner config. There is no public raw diff, restore, or rollback action.
+- Messy populated-vault retrieval: answer from runner-visible authority such as metadata-filtered authority results, active canonical sources, cited source paths, `doc_id`, and `chunk_id`; treat polluted, decoy, stale, draft, archived, duplicate, or candidate documents as non-authority unless runner-visible source authority says otherwise.
+- Synthesis maintenance: prefer `compile_synthesis`; include requested outcome claims in `body_facts` or `body`; use lower-level document and retrieval actions only for explicit primitive or manual cases; preserve `source_refs`, `## Sources`, `## Freshness`, provenance, and projection freshness.
+Detailed versions of these workflows belong in runner actions, compact runner help, maintainer/eval docs, or follow-up candidate-surface comparisons.
+
+## Document Tasks
+
+Run document tasks with:
+
+```bash
+openclerk document
+```
+
+Common actions are `validate`, `create_document`, `ingest_source_url`, `ingest_video_url`, `web_search_plan`, `artifact_candidate_plan`, `list_documents`, `get_document`, `append_document`, `replace_section`, `resolve_paths`, `inspect_layout`, `compile_synthesis`, `validation_synthesis_report`, and `git_lifecycle_report`.
+Use `openclerk document --help` for request shapes.
+
+Validation rejections use `rejected: true`; runtime failures exit non-zero.
+
+## Retrieval Tasks
+
+Run retrieval tasks with:
+
+```bash
+openclerk retrieval
+```
+
+Common actions are `search`, `document_links`, `graph_neighborhood`,
+`records_lookup`, `record_entity`, `services_lookup`, `service_record`,
+`decisions_lookup`, `decision_record`, `provenance_events`,
+`projection_states`, `audit_contradictions`, `source_audit_report`,
+`source_discovery_report`, `evidence_bundle_report`,
+`decision_lookup_report`, `duplicate_candidate_report`, and
+`workflow_guide_report`, `memory_router_recall_report`,
+`structured_store_report`, `hybrid_retrieval_report`, and `semantic_search`.
+Use `openclerk retrieval --help` for promoted workflow-action request shape.
+
+Use search for source-grounded answers; document links/graphs for markdown
+relationships; records/services/decisions for promoted projections; provenance
+for derivation; projection states for freshness. Canonical markdown remains
+authoritative over derived service, record, decision, and synthesis projections.
+
+Minimal request shapes:
+
+```json
+{"action":"search","search":{"text":"authority evidence","metadata_key":"status","metadata_value":"active","limit":10}}
+{"action":"provenance_events","provenance":{"ref_kind":"document","ref_id":"doc_id_from_json","limit":20}}
+{"action":"projection_states","projection":{"ref_kind":"document","ref_id":"doc_id_from_json","limit":20}}
+```
+
+## Deferred Capability Evidence
+
+Deferred-capability comparison, revisit, or promotion-decision questions are
+valid runner-backed evidence tasks when the user asks what existing OpenClerk
+documents and retrieval results can prove. Use installed `openclerk document`
+and `openclerk retrieval` JSON to inspect runner-visible documents,
+citations/source refs, provenance, and projection freshness.
+
+Treat memory transports, `remember`/`recall`, autonomous
+router APIs, vector DBs, embeddings, graph memory, and new runner actions as
+unsupported only when the user asks you to use, implement, or rely on them as
+routine OpenClerk surfaces.
+
+## Answering From Results
+
+Answer the user's substantive question from selected runner JSON fields before
+listing evidence. Preserve citation paths, source refs, doc ids, chunk ids,
+provenance, projection freshness, validation boundaries, and authority limits
+for source-sensitive claims. For retrieval-only repeats, confirm no durable
+write only when asked, but still restate the answer and citations.
+
+For unsupported workflows not covered above, say the production OpenClerk
+runner does not support that workflow yet.

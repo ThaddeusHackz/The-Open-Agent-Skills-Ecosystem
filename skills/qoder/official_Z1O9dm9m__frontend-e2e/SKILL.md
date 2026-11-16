@@ -1,0 +1,228 @@
+---
+name: frontend-e2e
+description: End-to-end test Wande-Play frontend pages with Playwright in the isolated kimi environment (backend :710N, frontend :810N). Covers smoke template generation (cp _template.spec.ts), 3 anti-regression assertions, ant-tabs HTMLElement.click workaround for AntDV 4.x, Drawer/Modal assertions with v-model:open, screenshot capture for evidence, single-worker execution, and failure diagnostics via trace reports.
+---
+
+# 前端 E2E 测试
+
+前端改动的**最终验证**。必须在**自己的 kimi 独立环境**（`:710N` backend / `:810N` frontend）执行，严禁占用主 Dev 环境（`:8080`）。
+
+## 环境
+
+| 资源 | kimiN 值 |
+|------|---------|
+| 后端 | `http://localhost:710N`（kimi1=7101 ...）|
+| 前端 | `http://localhost:810N`（kimi1=8101 ...）|
+| 登录 | `admin` / `admin123` / tenant `000000` |
+| e2e 目录 | `/data/home/ubuntu/projects/wande-play-kimiN/e2e`（**不在 frontend 下**）|
+| Playwright 依赖 | `e2e/node_modules/playwright/...` |
+
+**环境变量（run-cc.sh 自动注入，禁止硬编码端口）：**
+- `BASE_URL_FRONT` = `http://localhost:810N` — 前端地址
+- `BASE_URL_API` = `http://localhost:710N` — 后端API地址
+
+**smoke 测试必须使用 `BASE_URL_FRONT` / `BASE_URL_API` 环境变量，禁止硬编码端口。**
+> kimiN 端口：`backend=710N`，`frontend=810N`（例：kimi5→`:7105` / `:8105`）。smoke 模板已用 `${BASE_URL_FRONT}`，勿改为 `localhost:xxxx`。**硬编码导致 CI spec 在错误端口运行，必挂。**
+
+## 启动环境
+
+```bash
+cd /data/home/ubuntu/projects/wande-play-kimiN
+bash e2e/scripts/start-all.sh        # 一键拉起 backend + frontend
+# 或分开：
+bash e2e/scripts/start-backend.sh &
+cd frontend && pnpm dev --port 810N --host 0.0.0.0 &
+# 等前端日志出现 "ready in ..." + 后端日志 "Started RuoYiApplication"
+```
+
+## 前端 smoke 用例（强制：views/**/index.vue 必补，约束 7）
+
+改动 `frontend/apps/web-antd/src/views/**/index.vue` → 必须有对应 smoke。
+
+### 生成方式
+
+```bash
+cd /data/home/ubuntu/projects/wande-play-kimiN/e2e
+cp tests/front/smoke/_template.spec.ts tests/front/smoke/<module>-page.spec.ts
+# 编辑新文件，替换 ROUTE / PAGE_NAME 等占位符
+```
+
+### 3 条反事故断言（保留，#3487 教训）
+
+```ts
+import { test, expect } from '@playwright/test';
+
+const ROUTE = '/business/tender/prospect';   // ⚠️ sys_menu path 字段值，非 component 路径（project-mine 是 component 名，route 是 prospect）
+const PAGE_NAME = '项目挖掘';
+
+test.describe(`smoke: ${PAGE_NAME}`, () => {
+  // ⚠️ 登录 beforeEach 模板（3次踩坑后固定，禁止改动顺序）
+  test.beforeEach(async ({ page }) => {
+    await page.goto(`${BASE_URL}/auth/login`, { waitUntil: 'networkidle' });
+    // 1. 先 dismiss modal（必须在填账密之前！按钮文字是"知道了"不是"我知道了"）
+    try {
+      await page.waitForSelector('.ant-modal-close, button:has-text("知道了")', { timeout: 3000 });
+      await page.click('.ant-modal-close, button:has-text("知道了")');
+      await page.waitForTimeout(500);
+    } catch { /* 无 modal 忽略 */ }
+    // 2. 填账密
+    await page.getByPlaceholder('请输入用户名').fill('admin');
+    await page.getByRole('textbox', { name: '密码' }).fill('admin123');
+    // 3. 点登录（排除手机号/扫码按钮）
+    await page.locator('button:has-text("登录"):not(:has-text("手机号")):not(:has-text("扫码"))').first().click();
+    await page.waitForURL(url => !url.pathname.includes('/auth/login'), { timeout: 15000 });
+  });
+
+  test('页面可渲染', async ({ page }) => {
+
+    await page.goto(`${BASE_URL_FRONT}${ROUTE}`);
+
+    // 反事故 1：页面容器渲染（非白屏）
+    await expect(page.locator('.ant-page-container, [class*="Page"]')).toBeVisible();
+
+    // 反事故 2：vxe 表格或主布局存在（非空 body）
+    await expect(
+      page.locator('.vxe-table, .ant-table, .vxe-grid').first()
+    ).toBeVisible({ timeout: 10000 });
+
+    // 反事故 3：无控制台错误 / slot 返回 HTML 字符串报错
+    const errors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') errors.push(msg.text());
+    });
+    await page.waitForTimeout(2000);
+    expect(errors.filter((e) => !e.includes('favicon'))).toHaveLength(0);
+  });
+});
+```
+
+## E2E spec 执行
+
+```bash
+cd /data/home/ubuntu/projects/wande-play-kimiN/e2e
+npx playwright test tests/front/e2e/<spec>.spec.ts \
+  --project=e2e-tests --workers=1 --reporter=list
+```
+
+**强制 `--workers=1`**：多 worker 会抢占登录 session 导致 flaky。
+
+## 目录约定
+
+```
+e2e/tests/
+├── front/
+│   ├── smoke/           # 编程CC 自己写的 smoke（最小反事故）
+│   │   ├── _template.spec.ts
+│   │   └── <module>-page.spec.ts
+│   └── e2e/             # 完整业务回归（E2E CC 或 issue 特定）
+│       └── <module>-regression.spec.ts
+├── backend/
+│   ├── smoke/
+│   └── api/
+└── top-e2e/             # 顶层全量 E2E
+```
+
+## AntDV 4.x Tabs 点击（#3626 教训）
+
+Playwright `page.click('.ant-tabs-tab')` 在某些 AntDV 4.x 版本不触发切换。**workaround**：
+
+```ts
+// 用 HTMLElement.click() 原生触发
+await page.locator('[data-node-key="tasks"]').evaluate((el: HTMLElement) => el.click());
+
+// 或 page.evaluate 版本
+await page.evaluate((sel) => {
+  (document.querySelector(sel) as HTMLElement)?.click();
+}, '[data-node-key="tasks"]');
+```
+
+优先用 `data-node-key` 定位（稳定），避免按文本（国际化会改）。
+
+## Modal / Drawer 断言
+
+```ts
+// 打开 Modal
+await page.getByRole('button', { name: /新增/ }).click();
+await expect(page.locator('.ant-modal-title')).toHaveText('新增项目');
+await page.fill('input#title', '测试项目');
+await page.getByRole('button', { name: /确\s*定/ }).click();  // 中文按钮名注意空格
+
+// 打开 Drawer（v-model:open）
+await page.click('.ant-table-row >> text=项目A');
+await expect(page.locator('.ant-drawer-title')).toContainText('详情');
+```
+
+## 表格行选中
+
+```ts
+const rows = page.locator('.vxe-table--main-wrapper .vxe-body--row');
+await rows.nth(0).locator('.vxe-checkbox--icon').click();
+await rows.nth(1).locator('.vxe-checkbox--icon').click();
+```
+
+## 截图作为证据
+
+spec 过程中：
+
+```ts
+await page.screenshot({ path: '/tmp/step1-form.png', fullPage: true });
+```
+
+最终上传到 Release 作为 PR 证据，见 pr-visual-proof skill。
+
+## 失败诊断
+
+```bash
+# 1. HTML trace
+npx playwright show-report
+
+# 2. 单步调试
+npx playwright test tests/front/e2e/<spec>.spec.ts --headed --debug
+
+# 3. 看 error context
+cat test-results/<spec>-<case>/error-context.md
+```
+
+- 失败截图自动存 `test-results/<spec>/*.png`
+- `trace: 'retain-on-failure'` 保留完整交互录像
+
+## 常见陷阱
+
+| 陷阱 | 解法 |
+|------|------|
+| `page.click('.ant-tabs-tab')` 不切换 | 用 `el.click()` evaluate（见上） |
+| 表格 loading 时断言元素 | `page.waitForSelector('.vxe-loading', { state: 'hidden' })` |
+| Modal 关闭前检查表格已刷新 | `await page.waitForResponse(r => r.url().includes('/list'))` |
+| 登录 session 共享失败 | `storageState` 保存登录态，测前加载 |
+| 中文按钮名带全角空格 | 用 regex `name: /确\s*定/` |
+| `waitForTimeout(N)` 偶现 flaky | 换 `waitForSelector` / `waitForLoadState` |
+| 路由路径写错（用 component 名当 path）| 从 sys_menu.path 查真实路由：`docker exec mysql-dev mysql -u root -proot wande-ai -e "SELECT path,component FROM sys_menu WHERE component LIKE '%<module>%'"`；`/business/tender/prospect`（矿场）、`/cockpit`（超管）、`/bossCockpit`（耀总）、`/common/product-master/product-portal`（产品门户）|
+
+## 主环境 (:6040/:8080) 使用边界（2026-04-14 起）
+
+| 允许 | 禁止 |
+|------|------|
+| ✅ Playwright / `page.screenshot` 打开主环境页面**只读截图**，作为"修复前 / 原型对比"图贴 PR body（看看线上是什么样） | ❌ 任何 POST / PUT / DELETE / PATCH 请求 |
+| ✅ 浏览器 GET 页面、查看列表 | ❌ 填表单 + 提交（`page.click('提交')` / `page.fill` 后 submit）|
+| ✅ 纯 `page.goto` + `screenshot` 流程 | ❌ 登录后触发写接口、创建/修改/删除任何记录 |
+
+**硬红线**：E2E spec 的 `test(...)` 主体（做断言、跑业务流程）、数据构造、回归验证，**只能**指向自己的 `:810N`（前端）/ `:710N`（后端）。主环境仅用于生成对比截图素材。
+
+## 禁止
+
+- ❌ 在 spec 主体里用 `:6040 / :8080` 做业务流程断言（污染共享数据、抢登录 session）
+- ❌ 对主环境任何写请求（POST/PUT/DELETE，不管是 curl 还是 Playwright `page.click('新增')`）
+- ❌ 改 `playwright.config.ts` 的 baseURL 绕过环境隔离
+- ❌ 用 `waitForTimeout` 替代 `waitForSelector`
+- ❌ 并行 worker > 1（session 抢占）
+- ❌ 复制 spec 不改环境端口
+- ❌ 新建 views/**/index.vue 不加 smoke（quality-gate 门 4 拦截）
+
+## 自检清单（提 PR 前）
+
+- [ ] smoke spec 文件存在 `e2e/tests/front/smoke/<module>-page.spec.ts`
+- [ ] 3 条反事故断言保留（页面渲染 / 表格可见 / 无控制台 error）
+- [ ] spec 通过 `npx playwright test` 绿灯
+- [ ] 若涉及 Drawer / Tabs → 用 `v-model:open` / `data-node-key` 断言
+- [ ] 失败截图 / trace 已检查
+- [ ] 结果贴到 task.md 相应步骤勾选

@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""Endpoint self-test, run from the GitHub Actions runner (unrestricted egress).
+
+Proves every data source the harvest depends on before we spend hours on it.
+"""
+import json
+import sys
+import urllib.request
+
+FAILURES = []
+
+
+def get(url, timeout=30, headers=None):
+    req = urllib.request.Request(url, headers=headers or {"User-Agent": "harvest-selftest/1.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.status, resp.read()
+
+
+LOG_LINES = []
+import os
+os.makedirs("harvest-logs", exist_ok=True)
+LOG_PATH = "harvest-logs/selftest.txt"
+
+
+def check(name, fn):
+    try:
+        detail = fn()
+        line = f"PASS  {name} :: {detail}"
+    except Exception as exc:  # noqa: BLE001
+        import traceback
+        FAILURES.append(name)
+        line = f"FAIL  {name} :: {exc}\n{traceback.format_exc()}"
+        # Surface immediately via annotation (readable through the REST API).
+        first = str(exc).splitlines()[0] if str(exc) else repr(exc)
+        print(f"::error title=selftest::{name} failed: {first}")
+    print(line)
+    LOG_LINES.append(line)
+    with open(LOG_PATH, "a") as fh:
+        fh.write(line + "\n")
+        fh.flush()
+
+
+def t_skills_leaderboard():
+    status, body = get("https://www.skills.sh/api/skills/all-time/1")
+    data = json.loads(body)
+    n = len(data.get("skills", []))
+    assert status == 200 and n > 0, f"status={status} n={n}"
+    return f"{n} rows on page 1"
+
+
+def t_skills_sitemap():
+    status, body = get("https://www.skills.sh/sitemap-skills-1.xml")
+    assert status == 200 and b"<url>" in body, f"status={status}"
+    return f"{body.count(b'<loc>')} urls in sitemap-skills-1"
+
+
+def t_skills_detail_api():
+    # v1 detail API is auth-walled (expected). We harvest content from GitHub
+    # tarballs + skill-page HTML instead, so 401/404 here is an ACCEPTED state.
+    url = "https://www.skills.sh/api/v1/skills/vercel-labs/skills/find-skills"
+    try:
+        status, body = get(url)
+        if status == 200:
+            return "public (unexpected but fine)"
+        raise RuntimeError(f"unexpected status {status}")
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403, 404):
+            return f"auth-walled ({exc.code}) — using GitHub/page fallback"
+        raise
+
+
+def t_skills_page_html():
+    status, body = get("https://www.skills.sh/vercel-labs/skills/find-skills")
+    assert status == 200 and b"SKILL" in body, f"status={status}"
+    return f"{len(body)} bytes html"
+
+
+def t_qoder_index():
+    url = ("https://qoder.com/apphub/api/v1/marketplace/catalog/extensions"
+           "?extension_types=skill&pagination.current_page=1&pagination.page_size=50")
+    status, body = get(url)
+    data = json.loads(body)
+    pages = data["skills"]["pages"]
+    assert status == 200 and pages["total_size"] > 0
+    return f"total_size={pages['total_size']} last_page={pages['last_page']} items={len(data['skills']['items'])}"
+
+
+def t_qoder_detail():
+    url = "https://qoder.com/apphub/api/v1/marketplace/skills/official03866510/detail"
+    status, body = get(url)
+    data = json.loads(body)
+    assert status == 200 and data.get("readme_content"), f"status={status}"
+    return f"readme={len(data['readme_content'])}B download_url={'yes' if data.get('download_url') else 'no'}"
+
+
+def t_codeload():
+    status, body = get("https://codeload.github.com/vercel-labs/skills/tar.gz/refs/heads/main", timeout=60)
+    assert status == 200 and body[:2] == b"\x1f\x8b", f"status={status} magic={body[:2]!r}"
+    return f"{len(body)} bytes tarball"
+
+
+def t_skills_page_embeds_full_skill():
+    """The rendered page must contain the FULL SKILL.md, not a teaser."""
+    status, html = get("https://www.skills.sh/vercel-labs/skills/find-skills")
+    text = html.decode("utf-8", errors="replace")
+    # A line from deep inside the real SKILL.md (ground truth via GitHub API).
+    probes = [
+        'I found a skill that might help! The &quot;react-best-practices&quot; skill provides',
+        'I found a skill that might help! The \\"react-best-practices\\" skill provides',
+        'I found a skill that might help! The "react-best-practices" skill provides',
+    ]
+    hits = [p for p in probes if p in text]
+    assert status == 200 and hits, "deep SKILL.md line not found in HTML"
+    return f"full content embedded ({len(html)}B html, matched {len(hits)} form(s))"
+
+
+def main():
+    check("skills.sh leaderboard API", t_skills_leaderboard)
+    check("skills.sh sitemap", t_skills_sitemap)
+    check("skills.sh detail API", t_skills_detail_api)
+    check("skills.sh skill page html", t_skills_page_html)
+    check("skills.sh page embeds full SKILL.md", t_skills_page_embeds_full_skill)
+    check("qoder catalog index", t_qoder_index)
+    check("qoder skill detail", t_qoder_detail)
+    check("codeload.github.com tarballs", t_codeload)
+
+    if FAILURES:
+        print(f"\n{len(FAILURES)} endpoint(s) failed: {', '.join(FAILURES)}")
+        sys.exit(1)
+    print("\nAll endpoints OK.")
+
+
+if __name__ == "__main__":
+    main()

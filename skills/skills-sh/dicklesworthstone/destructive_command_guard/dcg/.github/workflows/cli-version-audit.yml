@@ -1,0 +1,17 @@
+name: cli-version-audit
+
+on:
+  workflow_dispatch:
+
+jobs:
+  version_audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run CLI version checker
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./scripts/check_cli_versions.sh

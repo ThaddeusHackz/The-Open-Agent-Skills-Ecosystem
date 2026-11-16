@@ -1,0 +1,21 @@
+MIT License
+
+Copyright (c) 2026 The Open Agent Skills Ecosystem contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+---
+
+Note on mirrored content: individual skills under skills/ are authored by
+their original authors and organizations and are mirrored here for offline
+import and auditing. They remain subject to their own upstream licenses and
+terms of use, if any. This license applies to the tooling, pipeline, and
+original documentation in this repository.

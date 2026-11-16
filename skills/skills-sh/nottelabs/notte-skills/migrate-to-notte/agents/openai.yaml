@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cost Comparison & Migration to Notte"
+  short_description: "Assess and migrate browser providers to Notte."
+  default_prompt: "Use $migrate-to-notte to assess this codebase, preserve its automation framework, and implement and validate the switch to Notte."

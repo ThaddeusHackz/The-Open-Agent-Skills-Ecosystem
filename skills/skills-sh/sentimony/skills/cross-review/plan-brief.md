@@ -1,0 +1,93 @@
+# Plan Review Brief
+
+Use this template for `plan` mode. Replace every placeholder, omit empty sections, and keep
+the brief self-contained: the reviewer has no skills and no conversation history.
+
+## Requirement sources
+
+- With a spec: the spec defines required behavior; the plan must implement it.
+- Without a spec (explicit request only): the plan's Goal and Global Constraints are the
+  requirements, plus any behavioral specs the host names as behavior to preserve.
+
+Pass the plan and spec to the runner as `--plan` and `--spec`: it appends their paths
+and content hashes on every round, so do not compute or copy them. Name every file the
+reviewer must read first. A Codex
+reviewer reads the sources itself. A Claude or Antigravity reviewer cannot read files
+outside the repository root, so embed the full content of any spec, plan, or behavioral spec stored
+there, under its path. Copy into the brief the repository rules from `AGENTS.md` that bear on the
+plan, because a Claude reviewer does not load project instructions. Tell an Antigravity reviewer to
+use only its file read and search tools: `agy` denies any command or file write and then
+ends the turn without an answer.
+
+## Template
+
+    You are an independent reviewer called by another agent. Inspect and report only.
+    Do not modify files, create fixes, commit, start other agents or CLIs, or use reviewer
+    skills such as cross-review or request-review.
+
+    Review mode: plan
+    Respond in the language of the user's conversation: <language>.
+
+    Target identity:
+    - Repository root: <path>
+    - Branch or worktree: <name>
+    - HEAD: <sha>
+    - Working tree: <clean | list of changed paths>
+    - Plan: <path> | runner-computed (--plan)
+    - Spec: <path> | runner-computed (--spec) | none (requirements: plan Goal and Global Constraints)
+    - Behavioral specs to preserve: <paths> | none
+
+    Read the requirement sources first, in this order: <spec>, <behavioral specs>, then
+    <plan>. Only then inspect the repository code the plan touches.
+
+    Repository rules:
+    <rules copied from AGENTS.md>
+
+    Excluded paths (do not read them): <paths and reason> | none
+
+    Objective: <what the plan must achieve>
+    Known review gaps: <gaps> | none
+
+## Verdicts
+
+Plan mode uses four verdicts in place of the four in `reviewer-brief.md`:
+
+    Spec compliance: PASS | FINDINGS | UNASSESSED
+    Scope compliance: PASS | FINDINGS | UNASSESSED
+    Plan soundness: PASS | FINDINGS | UNASSESSED
+    Verification adequacy: PASS | FINDINGS | UNASSESSED
+
+Include these review questions in the brief:
+
+- **Spec compliance:** does the plan implement every required behavior and constraint,
+  and does any task contradict the spec?
+- **Scope compliance:** does the plan stay inside the requested scope, and is every extra
+  change justified by a requirement?
+- **Plan soundness:** wrong assumptions about the current code, tool versions, or tool
+  behavior; missing steps; wrong task order or dependencies; steps that cannot be executed
+  as written.
+- **Verification adequacy:** does every task have a check that would catch a regression
+  of the behavior the spec requires?
+
+## Result format
+
+Copy the `Required result` and `Finding contract` sections of the installed
+`request-review/reviewer-brief.md` into the brief, with two changes:
+
+1. replace its four verdict lines with the four above;
+2. allow `Location or context` to name a plan task and step, or a spec section, in place
+   of a code line.
+
+Keep its rule that a result with no findings still states target, coverage, and every
+verdict.
+
+## Follow-up rounds
+
+A later round of the same plan uses the same brief and runs with
+`--followup <previous-run-dir> --dispositions <file>`; the runner rehashes the previous
+round's plan and spec paths, so the brief needs no edit for new hashes. The dispositions file
+lists every previous finding ID with the disposition from `received-review` and its author
+(`host`, or `owner` with a date). Never attribute a `host` decision to the owner; a finding
+the host rejected may be raised again when the evidence still supports it. The runner
+appends the file and the previous `review.md` and asks for a status of each previous
+finding: resolved, partially resolved, or not resolved.

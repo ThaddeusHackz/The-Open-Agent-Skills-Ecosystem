@@ -1,0 +1,4 @@
+indexed: 43554
+extracted: 43554
+failed: 0
+failed ids sample: []

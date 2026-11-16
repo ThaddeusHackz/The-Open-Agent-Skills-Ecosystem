@@ -1,0 +1,48 @@
+---
+name: backtrail-create
+description: Route Backtrail creation requests to ADR, FEATURE, or CHANGE creation
+---
+
+## Purpose
+
+Choose the correct Backtrail creation skill. Do not create or edit Backtrail artifacts directly.
+
+## Input
+
+Use the text after this skill invocation as the routing brief.
+
+## Prerequisites
+
+- Read `.backtrail/adl.md`, `.backtrail/changes.md`, `.backtrail/features.md`, and `.backtrail/tasks.md` before routing, when they exist.
+- Use indexes to identify referenced records, current direction, and artifact fit.
+- If an index is missing, route from the brief; the selected skill handles setup.
+
+## Workflow
+
+1. Check prerequisites.
+2. Durable decision -> `backtrail-create-adr`.
+   - Architecture, repository structure, public contracts, generated output, build/test workflow, dependencies, reversibility, or future-work constraints.
+3. User-visible capability/product behavior -> `backtrail-create-feature`.
+   - User workflows, acceptance criteria, product behavior, or durable capability specs.
+4. Concrete implementation work without an existing CHANGE scope contract -> `backtrail-create-change`.
+   - Bug fixes, local refactors, tests, existing ADR/FEATURE implementation details, copy changes, dependency patch updates, or implementation plans.
+5. Split an existing CHANGE into reviewable implementation checkpoints -> `backtrail-create-task`.
+   - Explicit TASK requests, staged implementation plans under one CHANGE, or large/risky CHANGE decomposition.
+6. If exactly one skill matches, immediately hand the original brief to that skill and continue that workflow.
+7. If multiple skills match, ask one clarifying question before routing.
+8. If none match, state that no matching Backtrail creation skill exists, then stop.
+
+## Question UX
+
+- Use `request_user_input` when available for two or three meaningful choices.
+- For routing ambiguity, present only the matching artifact types as choices: `ADR`, `FEATURE`, `CHANGE`, and/or `TASK`.
+- If `request_user_input` is unavailable, ask one concise plain-text question with numbered choices.
+- Do not claim that a skill can switch modes or force button rendering.
+
+## Guardrails
+
+- Do not create ADR, FEATURE, CHANGE, TASK, index, config, code, or test files.
+- Do not invent new Backtrail artifact types beyond documented Backtrail skills.
+- Do not route to implementation work.
+- Do not inspect the broader repository unless needed to classify the request.
+- Preserve the original brief when handing it off to the selected skill.

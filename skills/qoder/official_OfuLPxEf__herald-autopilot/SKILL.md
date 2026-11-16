@@ -1,0 +1,353 @@
+---
+name: herald-autopilot
+description: Use when you want one repo-local Herald workflow to take a single bug, feature, or workflow improvement from intake through planning, isolated worktree setup, implementation, impact-based verification, branch handoff, and GEPA-style run logging.
+---
+
+# Herald Autopilot
+
+Use this skill when the user wants to hand off one Herald task and come back later to a branch, verification evidence, and a readable report. This skill is intentionally single-task and single-worktree in v1 so it stays predictable while still capturing enough structure to evolve later.
+
+## When To Use
+
+- One Herald bug or feature should be driven end-to-end with minimal supervision.
+- The work should leave behind a branch, a worktree, a run folder, and a human-readable report.
+- The task benefits from repo-specific verification routing across code, TUI, SSH, and MCP.
+- The user later wants to say "improve GEPA" and have you continue from a durable workflow history.
+
+## Do Not Use
+
+- The user is asking for a broad multi-task sprint. Split it into one invocation per task first.
+- The task is purely exploratory and should not create worktrees or branch handoff artifacts.
+- The user explicitly wants manual step-by-step collaboration instead of autopilot.
+
+## Required Reads
+
+Read these before you start:
+
+- The living workflow ledger: [`docs/superpowers/gepa-evolution.md`](../../../docs/superpowers/gepa-evolution.md)
+- Workflow contract: [`references/workflow-contract.md`](references/workflow-contract.md)
+- Run schema: [`references/run-schema.md`](references/run-schema.md)
+- Verification routing: [`references/verification-routing.md`](references/verification-routing.md)
+- Product source of truth: [`references/product-truth.md`](references/product-truth.md)
+- Remediation templates: [`references/remediation-templates.json`](references/remediation-templates.json)
+
+If the task touches the TUI, also read and follow [`../tui-test/SKILL.md`](../tui-test/SKILL.md) for the tmux-driven visual checks.
+If the user explicitly asks to improve GEPA itself, also read [`references/gepa-improvement.md`](references/gepa-improvement.md).
+
+## Default Contract
+
+1. Treat one invocation as one task.
+2. Ask only critical questions that change implementation or safety.
+3. Show a concise plan summary, then proceed unless a risky or non-obvious tradeoff needs the user's decision.
+4. Before tracked-file edits, explicitly ask whether the plan intentionally degrades, removes, or weakens existing behavior. No degradation is allowed unless the user explicitly approves it.
+5. Record the degradation review gate with preserved behaviors and regression checks. If degradation is approved, record the approved degradation list and the remaining behaviors still protected by regression checks.
+6. Run preflight for docs, SSH, and media prerequisites before baseline or implementation work begins.
+7. Verify baseline, then create and switch into a dedicated worktree under `.worktrees/` before any tracked-file edits. Creating only a branch in the current checkout does not satisfy this.
+8. Keep all raw machine-readable artifacts under `.superpowers/autopilot/runs/<run-id>/`.
+9. Stop at local branch + worktree + report. Do not push, create a PR, or merge unless the user asks.
+10. If the user asks to commit, merge, push, or open a PR, do that requested publish step and then surface a visible self-reflection report with approval-ready workflow suggestions before you close out.
+11. After a requested publish step, sync the cross-run pending-approval queue so those suggestions become visible in one backlog instead of staying trapped in the single run report.
+12. If the task touches the TUI, close the canonical visual-evidence gate before handoff with matched before/after PNG and ANSI evidence at `220x50`, `80x24`, and `50x15`.
+13. If the task changes shortcuts, aliases, IME routing, or keyboard dispatch on the TUI surface, close the input-routing safety gate before handoff by proving text entry still works on `compose`, `prompt`, and `editor` surfaces.
+14. Every final handoff and rendered report must include a compact "How To Test This Change" section with exact copy-paste commands for building, launching the candidate binary, running focused verification, and exercising any affected TUI, MCP, or SSH smoke path.
+
+## Worktree Safety Correction
+
+If a Herald task moves from research or planning into implementation, create or switch into a dedicated `.worktrees/...` checkout before editing tracked files, even when the user did not explicitly request a full autopilot run. A normal branch in the main checkout is not enough because it blocks the user from running parallel tasks in the repo.
+
+If a prior research-only turn stayed in the main checkout, pause at the first implementation request, create the worktree, and continue there. Only skip this when the user explicitly asks to work in the current checkout.
+
+## GitHub Issue Association
+
+When the intake includes a GitHub issue URL or issue number, preserve that issue link throughout the run:
+
+- Record the issue reference in the run intake, plan, and final report.
+- Use `Refs #<issue>` in local branch commits when the run stops at branch + worktree + report, so pushing the branch later creates a GitHub cross-reference without prematurely implying completion.
+- If the user asks to create a PR, include `Closes #<issue>` or `Fixes #<issue>` in the PR body unless the user explicitly says the PR is partial.
+- If the user asks to merge or squash locally into the default branch, include `Closes #<issue>` or `Fixes #<issue>` in the default-branch commit body.
+- Do not manually close the issue unless the user asks, or unless the workflow has already pushed/merged the closing reference and verified GitHub sees the completed state.
+- If a commit or PR was created without the issue notation, call that out in the handoff and offer to amend before pushing.
+
+## Product-Definition Grounding
+
+For product or behavior changes, do not infer intent from screenshots or current code alone when the repo already has product docs.
+
+Use this grounding order:
+
+1. `VISION.md` for product direction and user-visible intent
+2. `ARCHITECTURE.md` for system boundaries and high-level implementation shape
+3. `docs/superpowers/specs/*.md` for concrete feature contracts
+4. `TUI_TESTPLAN.md`, `SSH_TESTPLAN.md`, and `MCP_TESTPLAN.md` for acceptance surfaces
+
+Record the consulted product-truth sources in the run metadata and final report whenever the task needs product grounding.
+
+If the task changes product behavior and the docs are missing or stale:
+
+- update the relevant product docs first
+- then implement against that source of truth
+
+For non-trivial feature work, prefer:
+
+- update acceptance criteria
+- update `VISION.md`
+- update `ARCHITECTURE.md` if boundaries or data flow change
+- add or update a real spec under `docs/superpowers/specs/`
+- then implement
+
+## Bootstrap A Run
+
+Create the run folder first so the workflow has durable state from the beginning:
+
+```bash
+python3 .agents/skills/herald-autopilot/scripts/bootstrap_run.py \
+  --repo-root "$(pwd)" \
+  --task "Fix the cleanup preview overflow at 80x24" \
+  --task-type bug \
+  --surfaces code,tui \
+  --plan-summary "Reproduce in tmux, add failing test if possible, fix layout, run focused TUI checks." \
+  --status initialized
+```
+
+This creates:
+
+- `.superpowers/autopilot/runs/<run-id>/run.json`
+- `.superpowers/autopilot/runs/<run-id>/intake.md`
+- `.superpowers/autopilot/runs/<run-id>/plan.md`
+- `.superpowers/autopilot/runs/<run-id>/evidence/manifest.json`
+- `.superpowers/autopilot/runs/<run-id>/reflections/`
+
+Before implementation, close the degradation review gate. Ask the user:
+
+> Does this plan intentionally degrade, remove, or weaken any existing behavior, compatibility, UI affordance, preview/media behavior, docs/demo output, or surface contract?
+
+If the answer is no, record preserved behavior plus the regression checks that will protect it:
+
+```bash
+python3 .agents/skills/herald-autopilot/scripts/record_degradation_review.py \
+  --run-dir ".superpowers/autopilot/runs/<run-id>" \
+  --answer no \
+  --user-response "No degradations are planned." \
+  --preserved-behavior "Chrome buttons remain visible in supported terminal and browser surfaces." \
+  --preserved-behavior "Image preview still renders inline or exposes open-image links in supported terminals." \
+  --regression-check "Capture the affected TUI state at 220x50, 80x24, and 50x15." \
+  --regression-check "Run the focused image preview tests when preview or media paths are touched."
+```
+
+If the user approves a degradation, record the approved degradation and the behavior that still must not regress:
+
+```bash
+python3 .agents/skills/herald-autopilot/scripts/record_degradation_review.py \
+  --run-dir ".superpowers/autopilot/runs/<run-id>" \
+  --answer yes \
+  --user-response "Approved removing the legacy label from the compact title row." \
+  --allowed-degradation "Legacy compact title-row label is removed." \
+  --preserved-behavior "Remaining title-row controls stay visible and reachable." \
+  --regression-check "Compare before/after title-row captures for visible button affordances."
+```
+
+Run preflight immediately after bootstrap whenever the task touches docs, SSH, or long-running media work:
+
+```bash
+python3 .agents/skills/herald-autopilot/scripts/preflight_run.py \
+  --run-dir ".superpowers/autopilot/runs/<run-id>"
+```
+
+This records:
+
+- docs dependency readiness such as `docs/node_modules/.bin/astro`
+- a run-local SSH host-key path for smoke checks
+- a resumable media-batch state file for long-running screenshot or VHS work
+
+## Worktree And Branch Policy
+
+Use the run metadata to create:
+
+- Branch: `codex/autopilot-<slug>-<timestamp>`
+- Worktree: `.worktrees/<run-id>-<slug>`
+
+Do not use `git switch -c` in the main checkout as a substitute for a worktree. The branch should be checked out inside the worktree path before implementation begins.
+
+Baseline verification happens before implementation. If the baseline is already failing, record that in the run, summarize it clearly, and ask whether to proceed on top of the dirty baseline only if it materially obscures the requested task.
+
+If preflight fails, stop and surface that environment blocker before feature-level verification starts.
+
+## Impact-Based Verification
+
+Route verification by affected surface instead of running every surface every time:
+
+- `code`: focused tests, builds, linters, or targeted commands that prove the requested behavior
+- `tui`: tmux-driven checks and visual inspection using `tui-test`
+- `ssh`: build `cmd/herald-ssh-server`, exercise the affected flow over SSH if the change touches the SSH surface
+- `mcp`: build or run `cmd/mcp-server`, invoke the relevant tool path if the change touches MCP behavior
+
+Every run also requires `degradation-review`. Treat the user's answer as part of the verification plan: preserved behaviors must have regression checks, and approved degradations must be explicitly listed.
+
+For visual TUI changes, always capture a matched before/after pair:
+
+- capture the same state before the code change whenever the baseline can be rendered safely
+- capture the same state after the code change, using the same terminal size and navigation path
+- store PNG screenshots and plain-text/ANSI captures under the run evidence folder
+- record the screenshots with evidence summaries that include `Before:` and `After:` so reports can surface them automatically
+- close the explicit visual-evidence gate for `220x50`, `80x24`, and `50x15` so small-terminal regressions stay visible instead of being rediscovered later
+
+Use the helper to record the canonical visual gate:
+
+```bash
+python3 .agents/skills/herald-autopilot/scripts/record_visual_evidence.py \
+  --run-dir ".superpowers/autopilot/runs/<run-id>" \
+  --state-label "cleanup-preview" \
+  --size "80x24" \
+  --before-png ".superpowers/autopilot/runs/<run-id>/evidence/before-cleanup-preview-80x24.png" \
+  --after-png ".superpowers/autopilot/runs/<run-id>/evidence/after-cleanup-preview-80x24.png" \
+  --before-text ".superpowers/autopilot/runs/<run-id>/evidence/before-cleanup-preview-80x24.ansi.txt" \
+  --after-text ".superpowers/autopilot/runs/<run-id>/evidence/after-cleanup-preview-80x24.ansi.txt" \
+  --repro-step "Launch Herald in tmux." \
+  --repro-step "Open the cleanup preview for the selected sender."
+```
+
+For shortcut, alias, or key-routing changes on text-entry surfaces, also record the input-routing gate:
+
+```bash
+python3 .agents/skills/herald-autopilot/scripts/record_input_routing_check.py \
+  --run-dir ".superpowers/autopilot/runs/<run-id>" \
+  --surface "compose" \
+  --input-sequence "," \
+  --expected-behavior "Literal comma is inserted into the active text field." \
+  --observed-behavior "Literal comma stayed in the field and no alias fired." \
+  --artifact ".superpowers/autopilot/runs/<run-id>/evidence/compose-comma-transcript.txt" \
+  --text-preserved \
+  --repro-step "Focus the compose text field." \
+  --repro-step "Type a comma while the alias feature is enabled."
+```
+
+Record every verification result with:
+
+```bash
+python3 .agents/skills/herald-autopilot/scripts/capture_evidence.py \
+  --run-dir ".superpowers/autopilot/runs/<run-id>" \
+  --kind command \
+  --summary "go test ./internal/app -run TestBuildLayoutPlan_CleanupPreviewCollapsesSummaryAt80Cols -v" \
+  --status pass \
+  --gate focused-tests \
+  --artifact "/tmp/autopilot-focused-test.log"
+```
+
+## Reflection Loop
+
+When a required gate fails, do not guess. Record the failure, the hypothesis, and the next bounded step:
+
+```bash
+python3 .agents/skills/herald-autopilot/scripts/record_reflection.py \
+  --run-dir ".superpowers/autopilot/runs/<run-id>" \
+  --attempt 1 \
+  --failing-evidence "focused-tests" \
+  --hypothesis "Cleanup preview width still depends on stale summary width at 80x24." \
+  --next-step "Trace layout plan inputs, update failing test, then patch cleanup width calculation." \
+  --decision continue \
+  --feedback "Required gate focused-tests failed: expected usable preview width at 80x24."
+```
+
+Stay in the same worktree for v1. Keep retries bounded by the run's retry limit.
+
+When the failing evidence matches a reusable remediation template such as `focused-tests`, `app-tests`, `app-package-tests`, `diff-check`, `input-routing-safety`, `user-repro-after-commit`, or `degradation-review`, use that checklist before inventing a new retry plan from scratch.
+
+## Update Run State
+
+Use the helper instead of hand-editing `run.json` when the run state changes:
+
+```bash
+python3 .agents/skills/herald-autopilot/scripts/update_run.py \
+  --run-dir ".superpowers/autopilot/runs/<run-id>" \
+  --status passed \
+  --outcome-summary "Implemented the fix, verified the required gates, and left the branch ready for review." \
+  --files-changed 4
+```
+
+## Final Scoring And Report
+
+Score the run before claiming success:
+
+```bash
+python3 .agents/skills/herald-autopilot/scripts/score_run.py \
+  --run-dir ".superpowers/autopilot/runs/<run-id>"
+```
+
+Then render both the run summary and the human report:
+
+```bash
+python3 .agents/skills/herald-autopilot/scripts/render_report.py \
+  --run-dir ".superpowers/autopilot/runs/<run-id>"
+```
+
+If the run performed a requested publish action such as a commit or merge, record that first:
+
+```bash
+python3 .agents/skills/herald-autopilot/scripts/update_run.py \
+  --run-dir ".superpowers/autopilot/runs/<run-id>" \
+  --publish-action commit \
+  --publication-summary "Created the requested local commit before handoff."
+```
+
+The report should make it easy for the user to answer:
+
+- What was requested?
+- What changed?
+- How do I run the candidate binary or demo build locally?
+- Which exact commands should I paste to verify the changed behavior?
+- Which gates passed, failed, or were skipped?
+- What remains risky?
+- Where is the worktree and branch?
+
+Use this handoff shape when possible:
+
+````markdown
+## How To Test This Change
+Candidate binary:
+```bash
+/absolute/path/to/bin/herald --demo
+```
+Focused verification:
+```bash
+cd /absolute/path/to/worktree
+go test ./...
+make build
+```
+````
+
+After a requested publish action, the rendered report should also make it easy to answer:
+
+- What went well in this run?
+- What slowed the run down?
+- Which workflow changes does the agent recommend next?
+
+After rendering a post-publish self-reflection, sync the visible approval backlog:
+
+```bash
+python3 .agents/skills/herald-autopilot/scripts/sync_pending_approvals.py \
+  --repo-root "$(pwd)"
+```
+
+If the user approves one or more queue items, record that decision instead of editing the queue by hand:
+
+```bash
+python3 .agents/skills/herald-autopilot/scripts/update_pending_approvals.py \
+  --repo-root "$(pwd)" \
+  --status approved \
+  --key "<queue-key>" \
+  --note "Approved after reviewing the reflected workflow change."
+```
+- Which of those changes require explicit approval before GEPA should apply them?
+
+## Evolving GEPA
+
+When the user later asks to improve GEPA itself:
+
+1. Read `docs/superpowers/gepa-evolution.md`.
+2. Inspect the most recent relevant runs under `.superpowers/autopilot/runs/`.
+3. Run the optimizer helpers in `scripts/` to summarize recent runs, build the lightweight frontier, extract feedback patterns, snapshot the current product truth, and prepare an improvement brief.
+4. Identify the single highest-value workflow bottleneck.
+5. Propose and implement one focused workflow change.
+6. Append an entry to the GEPA improvement log so the workflow has a durable improvement history suitable for future article writing.
+7. Update the evolution doc with what changed, what improved, what still hurts, and what to try next.
+
+v1 is intentionally a reflective single-run system. Do not introduce challenger worktrees or Pareto frontier selection unless the user asks for the next phase.

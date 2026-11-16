@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>The Open Agent Skills Ecosystem — live on skills.sh</title>
+<meta name="description" content="Complete offline mirror of the skills.sh directory and the Qoder skills marketplace. The live website is https://www.skills.sh/" />
+<style>
+  :root {
+    --bg: #07090d; --panel: #0e1219; --panel2: #131824;
+    --text: #e8ecf4; --muted: #93a0b4; --accent: #4ade80;
+    --accent2: #60a5fa; --border: #1e2634; --radius: 14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 600px at 70% -10%, #10203a 0%, transparent 55%),
+                radial-gradient(900px 500px at 10% 110%, #0d2a1d 0%, transparent 55%),
+                var(--bg);
+    color: var(--text);
+    font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6; min-height: 100vh;
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 48px 24px 80px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--panel2); border: 1px solid var(--border);
+    color: var(--muted); border-radius: 999px; padding: 6px 14px;
+    font-size: 13px; letter-spacing: .04em; text-transform: uppercase;
+  }
+  .pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+  h1 { font-size: clamp(34px, 6vw, 58px); line-height: 1.1; margin: 26px 0 14px; letter-spacing: -0.02em; }
+  h1 .grad { background: linear-gradient(92deg, var(--accent) 0%, var(--accent2) 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .sub { color: var(--muted); font-size: 18px; max-width: 720px; }
+  .cta { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 30px; }
+  a.btn {
+    display: inline-flex; align-items: center; gap: 10px;
+    background: linear-gradient(92deg, #16a34a, #2563eb);
+    color: white; text-decoration: none; font-weight: 600;
+    padding: 14px 26px; border-radius: 12px; font-size: 16px;
+    transition: transform .15s ease, filter .15s ease;
+  }
+  a.btn:hover { transform: translateY(-2px); filter: brightness(1.1); }
+  a.btn.ghost { background: var(--panel2); border: 1px solid var(--border); color: var(--text); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-top: 46px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px; }
+  .card .n { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; }
+  .card .l { color: var(--muted); font-size: 13.5px; margin-top: 4px; }
+  .card .n.green { color: var(--accent); } .card .n.blue { color: var(--accent2); }
+  h2 { margin: 54px 0 16px; font-size: 24px; letter-spacing: -0.01em; }
+  pre {
+    background: #0a0e15; border: 1px solid var(--border); border-radius: 12px;
+    padding: 18px 20px; overflow-x: auto; font-size: 14px; color: #c9d5e8;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  pre .c { color: #5b6b85; } pre .g { color: var(--accent); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .grid a {
+    display: block; background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px; text-decoration: none; color: var(--text);
+    transition: border-color .15s ease, transform .15s ease;
+  }
+  .grid a:hover { border-color: var(--accent2); transform: translateY(-2px); }
+  .grid .t { font-weight: 600; margin-bottom: 6px; }
+  .grid .d { color: var(--muted); font-size: 14px; }
+  footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border); color: var(--muted); font-size: 14px; }
+  footer a { color: var(--accent2); text-decoration: none; }
+  code { background: var(--panel2); padding: 2px 7px; border-radius: 6px; font-size: .92em; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <span class="pill"><span class="dot"></span> Live website · <a href="https://www.skills.sh/" style="color:var(--accent);text-decoration:none">skills.sh</a></span>
+
+  <h1>The Open Agent<br /><span class="grad">Skills Ecosystem</span></h1>
+  <p class="sub">
+    Every skill from <strong>skills.sh</strong> and the <strong>Qoder marketplace</strong>,
+    mirrored as standard <code>SKILL.md</code> packages you can import into any agent —
+    with a full forensic scan over the corpus. The canonical, always-fresh directory
+    lives on the live website.
+  </p>
+
+  <div class="cta">
+    <a class="btn" href="https://www.skills.sh/">Open the live directory → skills.sh</a>
+    <a class="btn ghost" href="https://www.skills.sh/trending">See trending skills</a>
+  </div>
+
+  <div class="stats">
+    <div class="card"><div class="n green">18,550</div><div class="l">skills.sh skills mirrored</div></div>
+    <div class="card"><div class="n blue">43,554</div><div class="l">Qoder marketplace skills</div></div>
+    <div class="card"><div class="n">62,104</div><div class="l">total importable SKILL.md packages</div></div>
+    <div class="card"><div class="n">4,119</div><div class="l">forensic findings triaged</div></div>
+  </div>
+
+  <h2>Install in one command</h2>
+  <pre><span class="c"># everything, into the universal agent skills directory</span>
+<span class="g">python3</span> tools/import_skills.py --agent universal --all
+
+<span class="c"># or the 500 most-installed skills.sh skills into Claude Code</span>
+<span class="g">python3</span> tools/import_skills.py --agent claude --source skills-sh --top 500
+
+<span class="c"># or plain copy — no tooling required</span>
+<span class="g">cp -r</span> skills/qoder/* skills/skills-sh/* ~/.agents/skills/</pre>
+
+  <h2>Go to the live website</h2>
+  <div class="grid">
+    <a href="https://www.skills.sh/">
+      <div class="t">skills.sh — Leaderboard</div>
+      <div class="d">The canonical live directory: ranked skills, installs, audits.</div>
+    </a>
+    <a href="https://www.skills.sh/trending">
+      <div class="t">Trending (24h)</div>
+      <div class="d">Skills climbing fastest right now on the live site.</div>
+    </a>
+    <a href="https://www.skills.sh/hot">
+      <div class="t">Hot</div>
+      <div class="d">Highest-velocity installs in the last hour vs yesterday.</div>
+    </a>
+    <a href="https://www.skills.sh/docs/api">
+      <div class="t">skills.sh API</div>
+      <div class="d">Programmatic access to the catalog, search, and audits.</div>
+    </a>
+    <a href="../../forensics/report.md">
+      <div class="t">Forensic scan report</div>
+      <div class="d">Security triage across every mirrored SKILL.md.</div>
+    </a>
+    <a href="../../catalog/index.json">
+      <div class="t">Catalog index</div>
+      <div class="d">Machine-readable provenance: ids, paths, hashes, coverage.</div>
+    </a>
+  </div>
+
+  <footer>
+    Skills belong to their original authors — this repository mirrors them for
+    offline import and auditing. Live website:
+    <a href="https://www.skills.sh/">https://www.skills.sh/</a>
+  </footer>
+</div>
+</body>
+</html>

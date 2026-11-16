@@ -1,0 +1,120 @@
+---
+name: pr-description
+description: Writes pull request descriptions for SODAX frontend work. Use when creating a PR, writing a PR description, summarizing changes for a pull request, or when asked to describe what a branch does.
+---
+
+You are writing a PR description for a SODAX frontend developer working with React, TypeScript, and Tailwind CSS.
+
+Run `git diff main...HEAD` to see all changes. Also run `git log main...HEAD --oneline` to understand the commit history.
+
+Write the PR description following this exact structure:
+
+---
+
+## Description
+One or two sentences explaining what this PR does. If it closes a ticket, **always** format the reference as a markdown link to the project board issue pane:
+
+`This PR closes [exact ticket title](https://github.com/orgs/icon-project/projects/12/views/2?filterQuery=gosia&pane=issue&itemId=<itemId>&issue=icon-project%7Csodax-frontend%7C<issueNumber>).`
+
+- The link text MUST be the ticket's exact title (including the `fix(web):` / `feat(web):` prefix and any em dashes).
+- `<issueNumber>` is the GitHub issue number (e.g. `1198`).
+- `<itemId>` is the project-board item ID. If you don't have it, ask the user for the project-board URL of the ticket and copy the `itemId` query param verbatim. Do not invent one.
+- `filterQuery=gosia` keeps the user's project-board filter active when the link is opened. Leave it as-is unless the user tells you otherwise.
+- Use `%7C` (URL-encoded pipe) in the `issue` param — do not use a literal `|`.
+
+If there are bonus improvements beyond the ticket scope, add a second sentence mentioning them.
+
+## Key Changes
+
+Group changes into relevant sections. Common sections for this codebase:
+
+### Feature: [Main Feature Name]
+Use ✅ bullets for the primary deliverables of the ticket — things that were explicitly required.
+
+* ✅ [Main thing added or implemented]
+* ✅ [Key behavior or default state]
+* ✅ [Scope/isolation note if relevant, e.g. "only affects X, not Y"]
+
+### Data Improvements (if applicable)
+Use ✅ for data-layer changes that unblock the feature. Use plain bullets for supporting tweaks.
+
+* ✅ [What data was enabled or fixed]
+* ✅ [What file or util was updated and why]
+
+### UI/UX Enhancements (if applicable)
+Use plain bullets (no ✅) for UI polish that wasn't explicitly in the ticket scope.
+
+* [Visual or layout improvement]
+* [Component refactor or styling fix]
+* [Accessibility or consistency fix]
+
+### Technical Improvements (if applicable)
+Use plain bullets for internal code quality changes.
+
+* [State management change]
+* [Type safety improvement]
+* [Removed duplication or fixed architecture issue]
+
+---
+
+## Testing Notes
+Bullet list of what was manually tested. Be specific — mention component names, variants, and behaviors.
+
+* Verified [main feature] works correctly
+* Confirmed [edge case or variant] appears/behaves as expected
+* Tested [related component] is not affected
+* Validated [no regression] in [related area]
+* Checked responsive behavior if UI was changed
+
+---
+
+## Checklist
+* I have performed a self-review of my own code
+* My changes generate no new warnings
+* UI matches design specifications
+* All acceptance criteria from ticket met
+
+---
+
+## Screenshots
+
+---
+
+**Rules to follow:**
+- Use ✅ only for changes that were explicitly required by the ticket. Use plain bullets for everything else.
+- Group changes logically — don't dump everything in one list.
+- Keep the Description short. Details go in Key Changes.
+- Don't invent ticket names — if you don't know the ticket title, write `__[Ticket Title]__` as a placeholder.
+- Keep Testing Notes concrete and specific, not generic.
+- Always end with the Checklist and Screenshots sections, even if Screenshots is empty.
+
+---
+
+## After writing the PR description
+
+Once the description is written, do the following:
+
+1. Suggest a short PR title (under 70 characters).
+
+   **Critical:** This repo runs `amannn/action-semantic-pull-request` in CI. If the branch has exactly **one non-merge commit**, the PR title MUST be byte-for-byte identical to that commit's subject line — otherwise the lint fails with: *"The pull request has only one (non-merge) commit ... Please update the pull request title accordingly to avoid surprises."*
+
+   Before suggesting a title:
+   - Run `git log main...HEAD --no-merges --oneline | wc -l` to count non-merge commits.
+   - If the count is `1`, take the subject line from `git log -1 --no-merges --pretty=%s` and use it verbatim as the suggested title — do not paraphrase, reword, or "improve" it.
+   - If the count is `>1`, you can compose a fresh title that summarizes the branch.
+
+   Show the title to the user and ask: "Does this title look good, or would you like to change it?" If the user requests a different title and the branch has only one commit, warn them about the lint and offer to either (a) amend the commit subject to match, or (b) add a trivial second commit so the lint stops requiring an exact match.
+
+2. Once the user confirms the title (or provides a new one), check if the branch has been pushed to the remote:
+   - Run `git status` to check tracking status
+   - If not pushed, run `git push -u origin HEAD`
+
+3. Then create the PR automatically using the `gh` CLI:
+
+```
+gh pr create --base main --title "<confirmed title>" --body "<the full PR description you wrote>"
+```
+
+4. Output the PR URL when done so the user can open it directly.
+
+**Important:** Always ask the user to confirm the title before running `gh pr create`. Never create the PR without confirmation.

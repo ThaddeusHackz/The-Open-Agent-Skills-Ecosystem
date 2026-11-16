@@ -1,0 +1,627 @@
+---
+name: pdf-to-ppt
+description: 将化学（实验化学 or 理论计算化学）学术论文 PDF 转换为专业学术型 PowerPoint 演示文稿。自动识别论文类型（实验/理论/混合），提取关键信息，生成结构化、可直接用于组会/答辩/学术报告的 PPTX 文件。当用户提到"论文转PPT"、"PDF转PPT"、"做组会PPT"、"文献汇报"、"学术报告PPT"、"化学论文PPT"、"实验化学PPT"、"计算化学PPT"，或提供化学相关 PDF/arXiv 论文要求生成演示文稿时触发。
+---
+
+# PDF → 化学学术 PPT 生成器
+
+将化学领域学术论文 PDF 转换为可直接使用的学术 PowerPoint 演示文稿。
+
+## 核心原则
+
+**让论文的科学论证逻辑驱动 PPT 结构，而非套用固定模板。**
+
+化学论文分为实验化学和理论计算化学两大范式，两者的叙事逻辑完全不同：
+
+- **实验化学**：问题 → 设计策略 → 合成/制备 → 表征 → 性能 → 机理 → 结论
+- **理论计算化学**：问题 → 计算方法 → 模型验证 → 电子结构/能量分析 → 机理阐释 → 实验对照 → 结论
+- **实验+理论混合**：问题 → 实验部分 → 计算部分 → 实验-理论互验 → 统一机理 → 结论
+
+生成的 PPT 应当让听众能够依次回答：
+1. 这个化学问题为什么重要？
+2. 前人做到了什么程度，瓶颈在哪？
+3. 本文的设计思路/计算策略是什么？
+4. 关键实验证据/计算结果是什么？
+5. 机理解释是否自洽？
+6. 有什么新认识，能推广吗？
+7. 局限性和开放问题是什么？
+
+## 输入形式
+
+接受以下任意形式：
+- 完整的论文 PDF 文件
+- arXiv / chemRxiv 预印本 PDF
+- 论文摘要 + 图表 + 结果文字
+- 结构化阅读笔记
+- 用户粘贴的论文内容
+
+默认输出语言为中文，保留关键化学术语、缩写、化合物名称、方法名的英文原文。如需全英文输出，在调用分析脚本时传 `--lang en`。
+
+## 脚本导入约定
+
+所有 Python 脚本位于 `<SKILL_ROOT>/scripts/`。在代码中导入时，统一使用以下方式（仅需在首个 import 前执行一次）：
+
+```python
+import sys, os
+_scripts_dir = os.path.join('<SKILL_ROOT>', 'scripts')
+if _scripts_dir not in sys.path:
+    sys.path.insert(0, _scripts_dir)
+```
+
+## 工作流程
+
+### Step 0: 安装依赖（首次使用）
+
+```bash
+pip install -r <SKILL_ROOT>/requirements.txt
+```
+
+### Step 1: 读取并理解论文
+
+**首先判断输入形式，选择对应路径：**
+
+| 输入 | 路径 |
+|------|------|
+| PDF 文件（本地/arXiv/chemRxiv） | → Step 1A: PyMuPDF 提取 + 结构化分析 |
+| 论文摘要 + 图表 + 文字片段 | → 跳过 Step 1A–3，直接从 Step 4 撰写 |
+| 用户粘贴的论文全文文本 | → 跳过 PDF 提取，用 `is_chemistry_domain()` 检测领域后直接撰写 |
+| 结构化阅读笔记 | → 直接映射到 Step 4–5 的 PPT 结构 |
+
+#### Step 1A: PDF 输入 — 结构化分析
+
+使用 `scripts/analyze_paper.py` 做完整的论文分析：
+
+```bash
+python <SKILL_ROOT>/scripts/analyze_paper.py paper.pdf --json analysis.json
+```
+
+脚本自动完成：
+- 全文文本提取
+- 标题 / 章节结构识别
+- **领域检测**：返回 `is_chemistry` 字段。若为 `false`，说明论文可能非化学领域——**告知用户**"检测到的化学特征较少，生成结果可能不够准确，是否继续？"用户确认后再继续
+- **论文化学类型分类**：实验化学 / 理论计算化学 / 实验+理论混合（附 confidence 标注）
+- **子领域识别**：催化 / 材料 / 有机合成 / 计算化学 / 电化学 / 光谱表征 / 环境大气 / 能源 / 辐射化学
+- 图表位置检测（Figure/Table caption 定位）
+- 特征方法提取（DFT functional、软件包、实验方法）
+
+文本中需额外人工识别以下信息（脚本无法自动判定）：
+- **核心化学问题与研究空白**
+- **核心论点/假说**
+- **关键结果**：性能数据、表征结论、能量数据、TOF、稳定性等
+- **机理/构效关系**
+- **创新点与局限**
+
+**重要**：不要编造论文中不存在的数据、机理或图表信息。如信息不明确，标注 "[待确认]"。
+
+#### Step 1B: 非 PDF 输入 — 领域检测
+
+对于粘贴文本或阅读笔记，调用 `is_chemistry_domain()` 做快速检测：
+
+```python
+from analyze_paper import is_chemistry_domain
+if not is_chemistry_domain(user_text):
+    # 告知用户，等待确认后继续
+    print("检测到的化学领域信号较少...")
+```
+
+#### 自定义关键词
+
+如需适配新子领域或调整关键词权重，编辑 `references/chemistry_keywords.json`：
+
+```json
+{
+  "subfields": {
+    "光化学": {
+      "en": "photochemistry",
+      "keywords": ["photoredox", "photoinduced", "visible light", "ET/PT", ...]
+    }
+  },
+  "computational_strong_signals": ["DFT", "VASP", ...],
+  "characterization_terms": ["XRD", "XPS", ...],
+  "method_patterns": [["regex", weight], ...],
+  "section_patterns": [["regex", "label"], ...]
+}
+```
+
+修改后无需改代码，脚本自动加载新配置。
+
+### Step 2: 判定论文化学类型并选择叙事弧
+
+根据论文内容判定类型，选择对应的叙事逻辑：
+
+#### 类型 A: 实验化学
+**识别信号**：包含合成步骤、湿化学方法、材料制备、催化剂测试、表征数据（XRD/TEM/SEM/XPS 等）、性能评价（转化率/选择性/产率/循环稳定性）
+
+**叙事弧**（question-to-evidence）：
+1. 化学问题与重要性
+2. 前人策略局限 → 本文设计思路
+3. 合成/制备路线
+4. 结构与组成表征
+5. 催化/性能评价
+6. 机理探究（in-situ 表征、对照实验、动力学等）
+7. 构效关系总结
+8. 结论与展望
+
+**PPT 结构**（12-16 页）：
+```
+Slide 1:  标题页
+Slide 2:  研究背景与化学问题
+Slide 3:  文献进展与瓶颈
+Slide 4:  本文设计策略
+Slide 5:  合成/制备路线
+Slide 6:  结构与组成表征（XRD/TEM/XPS...）
+Slide 7:  形貌与微观结构（SEM/TEM/HRTEM...）
+Slide 8:  性能评价（催化活性/选择性/稳定性）
+Slide 9:  关键对照实验或性能对比表
+Slide 10: 机理探究（in-situ / 动力学 / 毒化实验...）
+Slide 11: 构效关系 / 活性位点讨论
+Slide 12: 与文献基准对比
+Slide 13: 总结与创新点
+Slide 14: 局限性与展望
+```
+
+#### 类型 B: 理论计算化学
+**识别信号**：包含 DFT 计算、分子动力学、蒙特卡罗、电子结构分析、反应路径搜索、自由能计算、软件包名（VASP/Gaussian/CP2K/QE/GROMACS 等）、k-point/截断能/cutoff energy
+
+**叙事弧**（method-to-mechanism）：
+1. 化学问题与计算必要性
+2. 前人计算研究的局限
+3. 计算方法与模型体系
+4. 方法验证/基准测试
+5. 电子结构/吸附/反应中间体
+6. 能量剖面与反应路径
+7. 选择性起源/速控步分析
+8. 与实验对照（如有）
+9. 结论与展望
+
+**PPT 结构**（12-16 页）：
+```
+Slide 1:  标题页
+Slide 2:  研究背景与化学问题
+Slide 3:  前人计算研究回顾
+Slide 4:  计算方法与模型
+Slide 5:  方法验证/基准测试
+Slide 6:  关键中间体/过渡态结构
+Slide 7:  能量剖面 / 自由能图
+Slide 8:  电子结构分析（PDOS/Bader/COHP...）
+Slide 9:  反应选择性分析
+Slide 10: 微动力学/火山图（如有）
+Slide 11: 与实验数据对照（如有）
+Slide 12: 总结与创新点
+Slide 13: 局限性与展望
+```
+
+#### 类型 C: 实验+理论混合
+**识别信号**：同时包含实验部分和计算部分，计算用于解释实验现象
+
+**叙事弧**（experiment-theory-unified）：
+1. 化学问题与联合策略
+2. 实验部分（合成+表征+性能）
+3. 计算部分（模型+方法+结果）
+4. 实验-理论互验
+5. 统一机理解释
+6. 结论
+
+**PPT 结构**（14-18 页，选核心组合）：
+```
+Slide 1:  标题页
+Slide 2:  研究背景与化学问题
+Slide 3:  研究策略（实验+计算联合）
+Slide 4:  实验：合成与表征
+Slide 5:  实验：性能/催化结果
+Slide 6:  实验：关键表征证据
+Slide 7:  计算：方法与模型
+Slide 8:  计算：能量与电子结构
+Slide 9:  计算：反应路径/机理
+Slide 10: 实验-理论互验
+Slide 11: 统一机理模型
+Slide 12: 总结与展望
+```
+
+幻灯片数量根据论文实际内容灵活调整。参考公式：**页数 ≈ 关键图表数 × 1.5 + 4**（标题页+背景+设计策略+总结+致谢）。短通讯（Communication/Letter）通常 8-10 页，完整论文（Article）通常 12-16 页，实验+理论混合可至 18 页。
+
+### Step 3: 获取图表（多路径）
+
+图表是 PPT 的核心。按优先级尝试以下路径，后面的路径作为前面失败时的回退：
+
+#### 路径 A：本地 PDF 提取（首选，自动化程度最高）
+
+```bash
+python <SKILL_ROOT>/scripts/extract_charts.py paper.pdf output/figures 300 --report
+```
+
+**5 层提取策略**（新版增强）：
+
+| 策略 | 方法 | 置信度 |
+|------|------|--------|
+| 0. Caption 引导 | 搜索 "Figure X" 标题文本 → 定位标题上方图表区域 → 精确裁剪 | **高** |
+| 1. 矢量图聚类 | `cluster_drawings()` 默认容忍度 (3,3) | 中 |
+| 2. 多容忍度重试 | 放宽至 (6,6)→(10,10)→(15,15)→(20,20) | 中 |
+| 3. 嵌入位图 | `get_images()` 提取 JPEG/PNG | 低（分辨率有限） |
+| 4. 整页渲染 | 将整页渲染为 300 DPI 图片 | 最低（需手动裁剪） |
+
+策略 0 是新增的关键改进——利用论文中 Figure caption 的位置信息反向定位图表区域，大幅减少装饰线条的误识别。`--report` 参数生成 `extraction_report.json` 详细记录每一步的提取结果和置信度。
+
+检查 `output/figures/` 下的图片，根据文件名中的 `fig{N}` 编号关联到论文中的 Figure。
+
+#### 路径 B：DOI → arXiv 源文件（高清原图）
+
+如果论文有 arXiv 版本，arXiv 源文件 `.tar.gz` 中包含作者上传的原始高清图片（PDF/EPS/PNG）。这通常比 PDF 提取的图片质量高得多：
+
+```bash
+# 先解析 DOI，获取 arXiv ID
+python <SKILL_ROOT>/scripts/fetch_from_doi.py 10.1021/jacs.4c01234 --output output/
+
+# 如果检测到 arXiv 源，自动下载并解压提取图片
+python <SKILL_ROOT>/scripts/fetch_from_doi.py 10.1021/jacs.4c01234 --download-arxiv --output output/
+```
+
+`fetch_from_doi.py` 会：
+1. 调用 Semantic Scholar API（免费、无需密钥）解析 DOI → 论文元数据
+2. 检测 arXiv ID 和 Open Access PDF 链接
+3. `--download-arxiv` 时下载 arXiv 源文件，自动提取其中的 figures
+
+#### 路径 C：MCP 工具远程下载（当本地无 PDF 时）
+
+当用户只提供了 DOI 或论文链接但没有 PDF 文件时，使用 MCP 工具获取：
+
+```
+mcp__ai4scholar__download_semantic  — 从 Semantic Scholar 下载论文 PDF
+mcp__ai4scholar__download_arxiv     — 从 arXiv 下载论文 PDF
+mcp__ai4scholar__read_semantic_paper — 提取论文全文文本（含图表标题）
+```
+
+获取 PDF 后，回到路径 A 提取图表。MCP 工具适合：
+- 用户只给了 DOI，无本地文件
+- 出版商 PDF 图片被压缩，尝试 Semantic Scholar 的开放获取版本
+- arXiv 预印本通常比付费墙后的出版版本图片质量更高
+
+#### 路径 D：用户手动提供（最终回退）
+
+如果以上路径均失败，向用户请求：
+- "请提供论文的关键图表文件（Figure 1, Figure 2...）"
+- 用户可从出版商网站截图、或从 Supporting Information 提取
+
+**图表选择原则**：
+- 只选支撑论文论证的关键图表（通常 4-8 张）
+- 优先选：研究策略图/示意图 → 核心结果图 → 机理图 → 验证/对照图
+- 宁可少而清晰，不要多而拥挤
+- 对于密集的多面板图，考虑裁剪到最关键的 1-2 个面板
+
+### Step 4: 撰写幻灯片内容
+
+对每张幻灯片撰写：
+- **中文标题**（结论式标题，而非仅标签——如"Ru SAs 在 300°C 下实现 98% CO 转化率"，而非"催化性能"）
+- **3-4 个要点**（简洁中文 bullet points）
+- **关联的图表**（Figure 编号和文件路径）
+- **图表说明**（简短中文解读）
+- **一个核心 takeaway**（听众离开这一页时应该记住什么）
+- **演讲者备注**（口头报告时的补充说明，可选）
+
+每张幻灯片只传达一个核心信息。结果页优先放图表，让数据说话。
+
+### Step 5: 创建 PPTX
+
+使用 `scripts/create_ppt.py` 生成 PPTX（导入方式参见顶部"脚本导入约定"）：
+
+```python
+from create_ppt import ChemistryPPT
+
+ppt = ChemistryPPT(theme="academic")  # "academic" | "molecular" | "green" | "nature"
+
+# 添加幻灯片
+ppt.add_title_slide(
+    title_cn="中文标题",
+    title_en="English Title",
+    authors="Authors et al.",
+    journal="J. Am. Chem. Soc., 2024, 146, xxx",
+    doi="10.xxxx/xxxx"
+)
+
+ppt.add_section_slide("第一部分：研究背景")
+
+ppt.add_content_slide(
+    title="电催化 CO₂ 还原面临的选择性挑战",
+    bullets=[
+        "CO₂RR 产物分布广泛（CO, HCOOH, CH₄, C₂H₄, EtOH...），选择性控制困难",
+        "Cu 基催化剂是目前唯一能生成 C₂₊ 产物的金属，但法拉第效率通常 < 50%",
+        "关键瓶颈：*CO 中间体的吸附能和 C-C 偶联动力学难以同时优化"
+    ],
+    notes="强调 Cu 的独特性和选择性问题的根源"
+)
+
+ppt.add_figure_slide(
+    title="Ru₁/Cu 单原子合金的 HAADF-STEM 表征",
+    figure_path="output/figures/p3_fig1.png",
+    figure_label="Figure 1",
+    bullets=[
+        "HAADF-STEM 确认 Ru 以单原子形式分散在 Cu(111) 表面",
+        "EDS mapping 显示 Ru 均匀分布，无团簇形成",
+        "XANES 证实 Ru 处于氧化态 Ruᵟ⁺（0 < δ < 3）"
+    ],
+    caption="Source: Fig. 1a-c, adapted from original paper",
+    layout="figure_right"  # "figure_right" | "figure_top" | "figure_full"
+)
+
+ppt.add_table_slide(
+    title="催化性能对比",
+    headers=["催化剂", "FE(C₂₊)%", "电流密度 (mA/cm²)", "稳定性 (h)", "参考文献"],
+    rows=[
+        ["Ru₁/Cu", "82%", "300", "100", "This work"],
+        ["Cu NPs", "45%", "150", "20", "Nat. Catal. 2020"],
+        ["Ag/Cu", "60%", "200", "50", "JACS 2022"],
+    ]
+)
+
+ppt.add_summary_slide(
+    title="总结与展望",
+    bullets=[
+        "首次实现 Ru 单原子合金催化 CO₂ 到 C₂₊ 的高选择性转化（FE 82%）",
+        "Operando XAS + DFT 揭示了 Ru 位点促进 *CO 富集和 C-C 偶联的机制",
+        "该设计策略可拓展至其他单原子合金体系（Pt/Cu, Pd/Cu）",
+        "未来方向：膜电极（MEA）中的实际工况测试与放大"
+    ]
+)
+
+ppt.save("output/presentation.pptx")
+```
+
+**Slide 类型一览**：
+
+| 方法 | 用途 |
+|------|------|
+| `add_title_slide()` | 封面页：中英文标题、作者、期刊信息 |
+| `add_section_slide()` | 章节分隔页 |
+| `add_content_slide()` | 文字要点页（带可选副标题） |
+| `add_figure_slide()` | 图表+说明页（多种布局选项） |
+| `add_table_slide()` | 数据对比表 |
+| `add_summary_slide()` | 总结/结论页 |
+| `add_thankyou_slide()` | 致谢/提问页 |
+
+### Step 6: (可选) 生成 HTML 版本
+
+除 PPTX 外，还可生成带图的单文件 HTML 演示文稿（仿 guizang-ppt-skill 横向翻页风格，学术配色）：
+
+```python
+from generate_html import HtmlPPT
+
+html = HtmlPPT(title="学术报告", theme="molecular")
+
+# API 与 ChemistryPPT 完全一致
+html.add_title_slide("中文标题", title_en="English Title", authors="...", journal="...")
+html.add_section_slide("第一部分")
+html.add_content_slide("要点标题", ["要点1", "要点2"])
+html.add_figure_slide("图表标题", figure_path="figures/p3_fig1.png",
+                       bullets=["说明1", "说明2"], figure_label="Figure 1",
+                       layout="figure_right")
+html.add_summary_slide("总结", ["结论1", "结论2"])
+html.add_thankyou_slide()
+
+html.save("output/presentation.html")
+```
+
+**HTML 特性**：
+- 单文件，图片以 base64 嵌入，可直接用浏览器打开
+- 横向翻页：键盘 ← →、滚轮、触摸滑动、底部圆点导航
+- 4 套学术配色主题 (academic / molecular / green / nature)
+- 支持所有幻灯片类型（封面、章节、内容、图表、表格、总结、致谢）
+- 响应式设计，适配投影仪和移动端
+- 无需本地服务器，无需安装任何依赖
+
+### Step 7: (可选) 生成学术阅读报告
+
+除 PPT/HTML 外，还可生成可直接发布到技术社区的 Markdown 学术阅读笔记：
+
+```python
+from generate_report import ReportBuilder
+
+r = ReportBuilder()
+r.set_meta(
+    title="论文标题",
+    authors="作者列表",
+    journal="期刊, 年, 卷, 页码",
+    doi="10.xxxx/xxxx",
+    paper_type="computational",  # experimental / computational / hybrid
+    difficulty=3,                # 1-5 星
+    prerequisites=["基础概念1", "基础概念2"],
+)
+
+# 填充论文信息
+r.paper['innovation'] = "2-3 句话核心创新点"
+r.paper['abstract'] = "摘要要点"
+r.paper['problem'] = "解决什么问题"
+r.paper['approach'] = "核心方案（含方法层级）"
+r.paper['contributions'] = ["贡献1", "贡献2"]
+r.paper['background'] = "背景与动机（可含 Markdown 格式）"
+
+# 添加方法章节
+r.add_section(3, "整体计算策略", "计算流程描述...")
+r.add_section(3, "势能面描述", "- **方法层级**：...\n- **基组**：...")
+r.add_section(3, "动力学与采样", "- **MD 类型**：...\n- **增强采样**：...")
+
+# 添加结果
+r.paper['result_chain'] = "结果逻辑链：A → B → C → ..."
+r.paper['key_results'] = [
+    {"title": "结果1标题", "points": ["要点1", "要点2"], "figure": "Figure 1"},
+]
+
+# 添加图表
+r.add_figure("Figure 1", "figures/fig1.png", "图表描述", ["关键信息1", "关键信息2"], "Section X.X")
+
+# 添加 Q&A
+r.add_qa("为什么选择这个方法？", "答案...", "principle")  # principle/detail/boundary/extension
+
+r.paper['limitations'] = ["局限1", "局限2"]
+r.paper['applicable_scenarios'] = ["✅ 适合场景", "❌ 不适合场景"]
+
+r.save("output/paper_report.md")
+```
+
+**报告结构**：
+1. 元信息（标题/作者/期刊/难度/前置知识）
+2. 总览（创新点 + 摘要）
+3. 论文概述（问题/方案/贡献）
+4. 背景与动机
+5. 核心方法（按论文类型自动适配：QC方法/力场/ML势/增强采样）
+6. 结果与讨论（逻辑链 + 关键结果 + 图表）
+7. 总结与思考（贡献/局限/适用场景）
+8. Q&A 深度思考（原理理解/细节辨析/边界条件/延伸思考）
+
+### Step 8: 验证与错误报告
+
+生成 PPTX 后执行检查。`ChemistryPPT` 内置了错误追踪：
+
+```python
+ppt.save("output/presentation.pptx")
+ppt.save_report("output/presentation.pptx")  # 生成 JSON 报告
+
+# 或直接获取
+report = ppt.get_report()
+print(report["missing_images"])  # 未找到的图片列表
+print(report["warnings"])        # 警告
+print(report["errors"])          # 错误
+```
+
+**报告字段说明**：
+- `missing_images`: 所有 `add_figure_slide()` 中路径不存在的图片
+- `errors`: 图片插入失败等实际错误
+- `warnings`: 非致命问题
+- `slide_types`: 各类型幻灯片统计
+
+**自查清单**：
+- 所有引用的图表文件存在且正确插入
+- 幻灯片数量合理（10-18 页）
+- 无文字溢出或重叠
+- `missing_images` 为空或已确认可忽略
+
+### 错误处理与回退机制
+
+**图表提取阶段** (`extract_charts.py`)：
+1. 多策略提取：矢量图 `cluster_drawings()` → 嵌入图片 `get_images()` → 整页渲染回退
+2. 兼容 PyMuPDF 1.19+ 和 1.23+（自动切换 `cluster_drawings` / `get_drawings` + 手动聚类）
+3. 多容忍度尝试（3→6→10→15→20）当默认容忍度提取不足时
+4. 提取报告 JSON 自动生成：`--report` 参数输出 `extraction_report.json`
+
+**论文分析阶段** (`analyze_paper.py`)：
+1. 编码安全：Windows GBK/ASCII 回退，避免 Unicode 字符导致崩溃
+2. 论文分类置信度标注（high/medium/low），误分类时给出明确提示
+3. 结构化 JSON 输出：`--json report.json` 可集成到自动化流程
+4. 计算关键词权重：前 1/3 文本中的信号权重 ×3，参考文献区的信号权重 ×1
+
+**PPT 构建阶段** (`create_ppt.py`)：
+1. 缺失图片自动记录（不中断构建），在 `save()` 时汇总输出
+2. 图片插入异常捕获（损坏/格式不支持）
+3. `save_report()` 导出完整构建日志
+
+**常见错误及处理**：
+
+| 错误 | 原因 | 处理 |
+|------|------|------|
+| `cluster_drawings` 不存在 | PyMuPDF < 1.23 | 自动回退到 `get_drawings()` 手动聚类 |
+| 矢量图提取 0 个 | PDF 渲染方式特殊 | 自动尝试多容忍度，最终回退到整页渲染 |
+| Windows 编码崩溃 | Unicode 字符 (如 `−` `₂`) | `_safe_print()` 自动回退到 ASCII |
+| 论文类型误判 | 参考文献含表征关键词 | 加权检测（正文权重 ×3），confidence 标注 |
+| 图片文件不存在 | 用户未正确提取或路径错误 | 记录到 `missing_images`，幻灯片显示占位文本 |
+
+## 化学学术 PPT 视觉规范
+
+详见 `references/visual_style.md`。摘要如下：
+
+### 配色方案
+
+| 名称 | 主色 | 辅助色 | 强调色 | 适合 |
+|------|------|--------|--------|------|
+| **学术经典** (默认) | `003366` 深蓝 | `F5F5F5` 浅灰 | `CC3333` 暗红 | 通用化学 |
+| **分子科技** | `1A5276` 钢蓝 | `F8F9FA` 近白 | `E74C3C` 亮红 | 计算化学/材料 |
+| **绿色化学** | `1E5631` 深绿 | `F7F9F4` 米白 | `D4A017` 金 | 催化/能源/环境 |
+| **Nature 风格** | `222222` 近黑 | `FFFFFF` 白 | `0066CC` 蓝 | CNS 期刊汇报 |
+| **LaTeX Beamer** | `003366` 深蓝 | `FAFAFC` 极浅蓝灰 | `B41E1E` 暗红 | 学术会议/答辩（衬线字体） |
+
+### 字体
+
+- 中文标题：微软雅黑 / 思源黑体 Bold, 28-36pt
+- 中文正文：微软雅黑 / 思源黑体 Regular, 16-20pt
+- 英文/数字：Arial / Helvetica, 对应大小
+- 化学式/公式：保持等宽或合适的衬线字体
+- **LaTeX Beamer 主题**：全衬线字体（Latin Modern Roman / Georgia / Times New Roman），模拟学术会议 Beamer 演示文稿风格。需系统安装 Latin Modern 字体以获得最佳效果：`pip install latin-modern` 或从 CTAN 下载
+
+### 幻灯片布局
+
+- 16:9 宽屏（13.333" × 7.5"）
+- 内边距 ≥ 0.5"
+- 左对齐为主，标题可居中
+- 图表优先给大空间，说明文字简洁
+
+### 化学特色元素
+
+- **反应式/合成路线**：用化学结构式图片或 → 连接的文本式反应式
+- **数据表**：对比催化剂性能/计算参数时，用清晰的表格而非嵌入图片
+- **机理图**：保留原图，在旁边标注关键步骤（i, ii, iii...）
+- **能量图**：自由能剖面图标注关键过渡态和中间体能量
+- **表征数据**：XRD 谱图标注关键峰；XPS 标注价态；TEM 标注晶格间距
+
+## 输出文件
+
+默认在 `output/` 目录下生成：
+
+```
+output/
+├── presentation.pptx          # 最终 PPTX 文件
+├── presentation.html          # (可选) 单文件 HTML 演示文稿
+├── presentation_report.json   # PPTX 构建报告
+├── figures/                   # 提取的图表
+│   ├── p2_fig1.png
+│   ├── p4_fig2.png
+│   └── ...
+└── qa_report.md               # 质量检查报告（可选）
+```
+
+## 脚本说明
+
+| 脚本 | 功能 |
+|------|------|
+| `scripts/analyze_paper.py` | 分析 PDF 结构，识别论文化学类型、领域检测、图表位置 |
+| `scripts/extract_charts.py` | 提取 PDF 图表（5 层策略：caption 引导 → 矢量图 → 嵌入图 → 整页渲染） |
+| `scripts/fetch_from_doi.py` | **新增** DOI 解析：Semantic Scholar / arXiv API → 获取高清图源 |
+| `scripts/convert_to_images.py` | PDF 页面 → 高清图片（依赖 poppler/pdf2image） |
+| `scripts/create_ppt.py` | 主脚本：创建化学学术 PPTX（ChemistryPPT 类） |
+| `scripts/generate_html.py` | HTML 生成器：单文件横向翻页网页 PPT |
+| `scripts/generate_report.py` | 报告生成器：Markdown 学术阅读笔记 |
+| `scripts/utils.py` | **新增** 共享工具：safe_print / cluster_drawings_compat / setup_utf8_stdout |
+
+## 容错与回退
+
+- 如果 PDF 文本提取失败（扫描版 PDF），尝试用 OCR 或要求用户提供文本
+- 如果图表提取不理想，手动指定页面区域裁剪
+- 如果论文信息不完整（无 DOI/作者等），标注 "[信息缺失]" 继续生成
+- 如果无法确定化学子类型，默认使用"实验化学"模板
+- 绝不编造数据、机理或图表信息
+
+## 常见化学论文类型适配
+
+### 催化化学
+重点关注：制备方法、表征（XRD/TEM/XPS/BET）、活性/选择性/稳定性数据、TOF、活化能、in-situ 表征、DFT 辅助机理
+
+### 材料化学
+重点关注：合成策略、形貌调控、结构表征、物理化学性质、应用性能、构效关系
+
+### 有机合成化学
+重点关注：合成路线、底物适用范围、反应条件优化、机理验证实验、选择性控制
+
+### 计算化学/理论化学
+重点关注：计算方法和参数、模型合理性、能量/结构数据、与实验或基准的对照、反应机理的原子级阐释
+
+### 能源/电池化学
+重点关注：材料设计、电化学性能（容量/倍率/循环）、原位表征、界面化学、衰减机制
+
+### 环境/大气化学
+重点关注：反应动力学、产物分析、机理路径、环境意义、模型计算
+
+## 禁止事项
+
+- 不要生成占位符内容（"请手动添加XX"、"在此填写XX"）
+- 不要用固定模板套所有论文——应根据论文实际内容调整结构
+- 不要忽略化学式/元素符号的正确格式（上下标、斜体等）
+- 不要在结果页不放图表只放文字
+- 不要编造论文中不存在的数据或结论
+- 不要把 PPT 做成纯文字大纲而非可用的演示文稿

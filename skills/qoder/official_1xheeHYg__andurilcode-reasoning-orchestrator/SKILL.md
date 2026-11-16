@@ -1,0 +1,223 @@
+---
+name: reasoning-orchestrator
+description: "Apply this skill first whenever the user presents a problem, question, or situation that requires structured thinking — before reaching for any specific reasoning framework. Triggers on any substantive request to evaluate, analyze, diagnose, decide, design, improve, understand, or learn from something. This is the entry point for the reasoning skill collection. If you are unsure which reasoning skill to use, always start here."
+---
+
+# Reasoning Orchestrator
+
+**CRITICAL: This skill does NOT perform any reasoning itself. It plans and delegates. All reasoning is done by reading and applying individual skill files, or by spawning subagents. Do not shortcut by reasoning inline.**
+
+---
+
+## How to Execute This Skill
+
+Follow these steps exactly, in order. Do not skip or collapse steps.
+
+---
+
+### STEP 1 — Triage (no skill file needed)
+
+Classify the situation across these dimensions and write the classification before proceeding:
+
+**Temporal direction**: Forward-looking / Present-state / Backward-looking
+
+**Problem maturity**:
+- Unframed — problem itself may not be correctly defined
+- Framed, unsolved — problem understood, solution not found
+- Solved, needs validation — solution exists, needs stress-testing
+- Decided, needs learning — something happened, extract signal
+
+**Primary obstacle**:
+- Don't understand the system → diagnostic track
+- Understand it, stuck on solutions → generative track
+- Have solutions, need to choose → convergence track
+- Something went wrong → retrospective track
+- About to commit to something → adversarial track
+- Don't know what we don't know → epistemic track
+- Incentives misaligned / need to design rules → strategic track
+
+**Domain complexity** (if unclear, assign `unknown` and include `cynefin-framework` in Step 2):
+Clear / Complicated / Complex / Chaotic / Unknown
+
+Write the triage output:
+```
+TRIAGE
+Temporal: [forward / present / backward]
+Maturity: [label]
+Obstacle: [label] → [track]
+Domain: [label]
+```
+
+---
+
+### STEP 2 — Build the Execution Plan (no skill file needed)
+
+Using the triage and the routing table, produce a numbered execution plan. Label each step `SEQUENTIAL` or `PARALLEL`. Do not execute yet.
+
+**Routing table — entry points by obstacle:**
+
+| Obstacle | Execution plan |
+|----------|---------------|
+| Don't know what we're dealing with | PARALLEL: epistemic-mapping ∥ cynefin-framework ∥ cognitive-bias-detection → re-triage |
+| Don't understand the system / why it's failing | PARALLEL: system-thinking ∥ theory-of-constraints → SEQUENTIAL: five-whys-root-cause → decision-synthesis |
+| Don't understand the system / strategic agents involved | PARALLEL: system-thinking ∥ game-theoretic-analysis → SEQUENTIAL: five-whys-root-cause → decision-synthesis |
+| Plan / design needs validation | PARALLEL: inversion-premortem ∥ red-teaming ∥ second-order-thinking → SEQUENTIAL: cognitive-bias-detection → decision-synthesis |
+| Scaling / trajectory / "what if we push this?" | SEQUENTIAL: limit-thinking → PARALLEL: second-order-thinking ∥ scenario-planning → decision-synthesis |
+| Stuck, all solutions feel the same | SEQUENTIAL: epistemic-mapping → PARALLEL: lateral-thinking ∥ analogical-thinking ∥ first-principles-thinking → SEQUENTIAL: inversion-premortem → decision-synthesis |
+| Need to decide between options | PARALLEL: scenario-planning ∥ probabilistic-thinking ∥ fermi-estimation → decision-synthesis |
+| Something went wrong / post-mortem | SEQUENTIAL: retrospective-counterfactual → PARALLEL: five-whys-root-cause ∥ epistemic-mapping → SEQUENTIAL: cognitive-bias-detection |
+| Long-term strategic commitment | PARALLEL: epistemic-mapping ∥ cognitive-bias-detection ∥ cynefin-framework → PARALLEL: scenario-planning ∥ probabilistic-thinking ∥ fermi-estimation → PARALLEL: inversion-premortem ∥ red-teaming ∥ second-order-thinking → SEQUENTIAL: game-theoretic-analysis → decision-synthesis |
+| Incentives misaligned / need to design rules | SEQUENTIAL: game-theoretic-analysis → PARALLEL: second-order-thinking ∥ red-teaming → decision-synthesis |
+| Synthesize evidence from multiple sources | SEQUENTIAL: evidence-synthesis → decision-synthesis |
+
+Write the plan:
+```
+EXECUTION PLAN
+Step 1 — PARALLEL: [skill-a] ∥ [skill-b] ∥ [skill-c]
+Step 2 — SEQUENTIAL: [skill-d]
+Step 3 — PARALLEL: [skill-e] ∥ [skill-f]
+Step 4 — SEQUENTIAL: [skill-g]
+```
+
+---
+
+### STEP 3 — Execute the Plan (step by step, never all at once)
+
+Work through one step at a time.
+
+#### For a SEQUENTIAL step:
+
+1. **Read the skill file**: `view: skills/[skill-name]/SKILL.md`
+2. **Apply the skill** to the current problem context, following the methodology exactly
+3. **Write the output** in the skill's output format
+4. **Write the routing decision**:
+   ```
+   STEP [N] COMPLETE — SEQUENTIAL: [skill-name]
+   Key finding: [1–2 sentences]
+   Routing to Step [N+1]: [reason based on finding]
+   ```
+5. Proceed to next step
+
+#### For a PARALLEL step:
+
+1. **Spawn one subagent per skill** using the Task tool. Each receives:
+   - Full problem description
+   - Findings from prior sequential steps
+   - This instruction: *"Read skills/[skill-name]/SKILL.md then apply that skill's full methodology to the problem. Output your findings in that skill's output format. Do not perform other reasoning."*
+
+2. **Wait for all subagents to complete**
+
+3. **Synthesize their outputs**:
+   ```
+   SYNTHESIS — Step [N] PARALLEL: [skill-a] ∥ [skill-b] ∥ [skill-c]
+
+   Convergent findings (2+ skills agree — higher confidence):
+   - [finding]
+
+   Divergent findings (1 skill only — worth noting):
+   - [finding] (from [skill])
+
+   Contradictions (skills disagree — resolve before proceeding):
+   - [skill-a] says [X], [skill-b] says [Y] → resolution: [...]
+
+   Key inputs for Step [N+1]: [what the next step needs]
+   ```
+
+4. Proceed to next step
+
+---
+
+### STEP 4 — Terminate
+
+Stop when:
+- `decision-synthesis` has produced a decision with acceptable confidence
+- The problem is understood well enough to act without further analysis
+- **4+ steps without converging**: stop, flag as likely unframed, restart from Step 1 with `epistemic-mapping` as the only entry point
+
+Write the termination output:
+```
+CHAIN COMPLETE
+Steps executed: [list with SEQUENTIAL/PARALLEL labels]
+Key finding: [1–2 sentences]
+Recommended action: [what to do now]
+```
+
+Then propose follow-up skills. Do NOT auto-execute. Common follow-ups:
+
+- Decision made → "Want me to write this up? (`technical-writing` for ADR/RFC, `argument-craft` to structure the case)"
+- Plan needed → "Want me to break this into an execution plan? (`execution-planning`)"
+- Communication needed → "Want a presentation? (`presentation-craft`) or draft announcement? (`technical-writing`)"
+
+Present only relevant follow-ups. If none needed, say so.
+
+---
+
+## Parallelization Reference
+
+Skills within a cluster apply independent lenses and never depend on each other's output.
+
+| Pattern | Skills | Use when |
+|---------|--------|---------|
+| P1 — Adversarial | inversion-premortem ∥ red-teaming ∥ second-order-thinking | Validating a plan before commitment |
+| P2 — Generative | lateral-thinking ∥ analogical-thinking ∥ first-principles-thinking | Stuck, need new options |
+| P3 — Diagnostic | system-thinking ∥ theory-of-constraints | System failing, need to understand why |
+| P4 — Uncertainty | scenario-planning ∥ probabilistic-thinking ∥ fermi-estimation | Decision needs quantification |
+| P5 — Meta-cognitive | epistemic-mapping ∥ cognitive-bias-detection ∥ cynefin-framework | Clean the reasoning environment first |
+| P6 — Strategic | game-theoretic-analysis ∥ second-order-thinking | Multiple agents with competing incentives |
+
+---
+
+## Post-Step Routing Reference
+
+After completing any step, adjust the plan if findings warrant:
+
+| Completed skill | Finding | Adjust plan to include |
+|----------------|---------|----------------------|
+| epistemic-mapping | Dangerous assumptions found | first-principles-thinking (sequential, next) |
+| cynefin-framework | Domain = Complex | lateral-thinking ∥ scenario-planning (parallel) instead of structured analysis |
+| cynefin-framework | Domain = Chaotic | Act immediately; retrospective-counterfactual after stabilization |
+| game-theoretic-analysis | Nash Equilibrium ≠ Pareto Optimum | Mechanism design — decision-synthesis with design constraints |
+| game-theoretic-analysis | Information asymmetry identified | red-teaming on exploitability (sequential) |
+| game-theoretic-analysis | Repeated game dynamics | second-order-thinking on reputation effects (sequential) |
+| system-thinking | Bottleneck identified | theory-of-constraints (sequential) |
+| five-whys-root-cause | Root cause is causal claim | evidence-synthesis (sequential) |
+| five-whys-root-cause | Multiple root causes | decision-synthesis (sequential, to prioritize) |
+| adversarial panel (P1) | High-severity risks | cognitive-bias-detection on the risk analysis (sequential) |
+| generative panel (P2) | All options weak | epistemic-mapping — frame may be wrong (sequential, restart) |
+| uncertainty panel (P4) | High uncertainty persists | inversion-premortem on worst-case scenario (sequential) |
+| limit-thinking | Asymptotic ceiling found | theory-of-constraints to identify the constraint (sequential) |
+| limit-thinking | Reversal / collapse found | first-principles-thinking — is this the right variable? (sequential) |
+| limit-thinking | Optimal operating point identified | decision-synthesis (sequential) |
+| second-order-thinking | Consequence chain suggests trajectory | limit-thinking to trace to the extreme (sequential) |
+| decision-synthesis | Key assumption too uncertain | epistemic-mapping → validate before committing |
+| evidence-synthesis | Evidence synthesized, decision needed | decision-synthesis (sequential) |
+| retrospective-counterfactual | Systemic cause found | system-thinking ∥ five-whys-root-cause (parallel) |
+
+---
+
+## Skill Registry
+
+| Skill | File path | Parallelizes with |
+|-------|-----------|------------------|
+| epistemic-mapping | skills/epistemic-mapping/SKILL.md | cynefin-framework, cognitive-bias-detection |
+| cynefin-framework | skills/cynefin-framework/SKILL.md | epistemic-mapping, cognitive-bias-detection |
+| system-thinking | skills/system-thinking/SKILL.md | theory-of-constraints |
+| theory-of-constraints | skills/theory-of-constraints/SKILL.md | system-thinking |
+| five-whys-root-cause | skills/five-whys-root-cause/SKILL.md | — |
+| cognitive-bias-detection | skills/cognitive-bias-detection/SKILL.md | epistemic-mapping, cynefin-framework |
+| inversion-premortem | skills/inversion-premortem/SKILL.md | red-teaming, second-order-thinking |
+| red-teaming | skills/red-teaming/SKILL.md | inversion-premortem, second-order-thinking |
+| second-order-thinking | skills/second-order-thinking/SKILL.md | inversion-premortem, red-teaming |
+| probabilistic-thinking | skills/probabilistic-thinking/SKILL.md | scenario-planning, fermi-estimation |
+| fermi-estimation | skills/fermi-estimation/SKILL.md | probabilistic-thinking, scenario-planning |
+| scenario-planning | skills/scenario-planning/SKILL.md | probabilistic-thinking, fermi-estimation |
+| game-theoretic-analysis | skills/game-theoretic-analysis/SKILL.md | second-order-thinking |
+| limit-thinking | skills/limit-thinking/SKILL.md | second-order-thinking, scenario-planning |
+| lateral-thinking | skills/lateral-thinking/SKILL.md | analogical-thinking, first-principles-thinking |
+| analogical-thinking | skills/analogical-thinking/SKILL.md | lateral-thinking, first-principles-thinking |
+| first-principles-thinking | skills/first-principles-thinking/SKILL.md | lateral-thinking, analogical-thinking |
+| bisociative-creativity | skills/bisociative-creativity/SKILL.md | standalone |
+| decision-synthesis | skills/decision-synthesis/SKILL.md | runs after all others |
+| decision-intelligence | skills/decision-intelligence/SKILL.md | standalone (single-option evaluation) |
+| retrospective-counterfactual | skills/retrospective-counterfactual/SKILL.md | five-whys-root-cause |
+| evidence-synthesis | skills/evidence-synthesis/SKILL.md | — |

@@ -1,0 +1,383 @@
+---
+name: run
+description: "Full CWF pipeline auto-chaining for end-to-end delegation without manual stage sequencing. Orchestrates: gather → clarify → plan → review(plan) → impl → review(code) → refactor → retro → ship. Respects Decision #19: human gates pre-impl, autonomous post-impl. Triggers: \"cwf:run\", \"run workflow\""
+---
+
+# Run
+
+Delegate end-to-end workflow orchestration when users do not want to manually sequence each skill.
+
+## Quick Start
+
+```text
+cwf:run <task description>           # Full pipeline from scratch
+cwf:run --from impl                  # Resume from impl stage
+cwf:run --skip ship                  # Full pipeline, skip ship
+cwf:run --skip review-plan,retro     # Skip specific stages
+cwf:run --ambiguity-mode strict      # Override T3 handling policy for this run
+```
+
+Operational note:
+- Default `cwf:run` chain is: gather → clarify → plan → review(plan) → impl → review(code) → refactor → retro → ship.
+- `refactor` runs before retro/ship to catch cross-skill and docs drift as part of the default delivery quality loop.
+- Context-deficit resilience applies: stage orchestration must recover from persisted state/artifacts/handoff files, not prior chat memory.
+
+---
+
+## Namespace Routing Guard (Required)
+
+If user input contains the token `cwf:run` anywhere, keep execution strictly in this CWF run skill.
+
+- Detect by token match, not prefix-only string checks.
+- Match the whole token `cwf:run` (with optional flags/arguments), not loose `cwf` substrings.
+- Do not substitute similarly named run flows from other plugins.
+- If routing is uncertain, emit `WAIT_INPUT` instead of switching skill families.
+
+## Non-Interactive Fail-Fast Policy (Required)
+
+When interactive confirmation is unavailable, do not continue with inferred defaults for setup/readiness gates.
+
+Mandatory behavior:
+
+1. Evaluate setup readiness first (Phase 0).
+2. If readiness is not satisfied, stop immediately before stage initialization.
+3. Print a deterministic waiting response with exact next actions.
+4. End the turn immediately after the waiting response.
+
+Standard response header:
+
+```text
+WAIT_INPUT: run requires setup readiness before pipeline initialization.
+```
+
+Always include:
+
+```text
+Run `cwf:setup` first, then retry `cwf:run`.
+```
+
+---
+
+## Phase 0: Setup Readiness Preflight
+
+Before initializing pipeline state, validate that repository setup prerequisites exist.
+
+1. Run deterministic readiness check:
+
+   ```bash
+   bash {CWF_PLUGIN_DIR}/scripts/check-setup-readiness.sh --base-dir . --summary
+   ```
+
+1. If check fails, do not initialize live state and do not create run artifacts.
+1. Return deterministic waiting output:
+
+   ```text
+   WAIT_INPUT: run requires setup readiness before pipeline initialization.
+   Missing setup prerequisites were detected.
+   Run `cwf:setup` first, then retry `cwf:run`.
+   ```
+
+---
+
+## Phase 1: Initialize
+
+1. Parse task description and flags (`--from`, `--skip`, `--ambiguity-mode`)
+1. Resolve base branch (for branch/ship policy):
+
+   ```bash
+   resolved_base_branch="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||')"
+   if [[ -z "$resolved_base_branch" ]]; then
+     if git show-ref --verify --quiet refs/heads/main; then
+       resolved_base_branch="main"
+     elif git show-ref --verify --quiet refs/heads/master; then
+       resolved_base_branch="master"
+     else
+       echo "WAIT_INPUT: base branch could not be resolved (tried origin/HEAD, main, master)."
+       exit 1
+     fi
+   fi
+   ```
+1. Enforce run-start branch policy:
+
+   ```bash
+   current_branch="$(git branch --show-current)"
+   if [[ "$current_branch" == "$resolved_base_branch" ]]; then
+     session_slug="{sanitized-title}"
+     run_branch="feat/${session_slug}"
+     if git show-ref --verify --quiet "refs/heads/$run_branch"; then
+       run_branch="feat/${session_slug}-$(date +%H%M%S)"
+     fi
+     git checkout -b "$run_branch"
+     current_branch="$run_branch"
+   fi
+   ```
+
+   - If run starts on the base branch (typically `main`), create and switch to a dedicated feature branch before stage writes.
+   - If run starts on a non-base branch, keep that branch and treat it as the active run branch.
+1. Resolve ambiguity mode (`--ambiguity-mode` or config default):
+
+   ```bash
+   source {CWF_PLUGIN_DIR}/hooks/scripts/env-loader.sh
+   cwf_env_load_vars CWF_RUN_AMBIGUITY_MODE
+
+   # precedence: CLI flag > config/env > built-in default
+   resolved_mode="{--ambiguity-mode flag value if provided}"
+   if [[ -z "$resolved_mode" ]]; then
+     resolved_mode="${CWF_RUN_AMBIGUITY_MODE:-defer-blocking}"
+   fi
+
+   case "$resolved_mode" in
+     strict|defer-blocking|defer-reversible|explore-worktrees) ;;
+     *)
+       echo "Invalid ambiguity mode: $resolved_mode (fallback: defer-blocking)"
+       resolved_mode="defer-blocking"
+       ;;
+   esac
+   ```
+1. Bootstrap session directory via `{CWF_PLUGIN_DIR}/scripts/next-prompt-dir.sh --bootstrap <sanitized-title>`
+   - This creates the directory, initializes `plan.md`/`lessons.md` if missing, and pre-registers the session in `cwf-state.yaml` `sessions` when state exists.
+1. Initialize live state (session-first write path):
+
+   ```bash
+   bash {CWF_PLUGIN_DIR}/scripts/cwf-live-state.sh set . \
+     session_id="{next session ID}" \
+     dir="{session directory}" \
+     branch="{current branch}" \
+     worktree_root="{current git worktree root (absolute path)}" \
+     worktree_branch="{current branch}" \
+     phase="gather" \
+     task="{task description}" \
+     active_pipeline="cwf:run" \
+     user_directive="{original user directive}" \
+     ambiguity_mode="{resolved_mode}" \
+     blocking_decisions_pending="false" \
+     ambiguity_decisions_file="{session directory}/run-ambiguity-decisions.md" \
+     stage_provenance_file="{session directory}/run-stage-provenance.md" \
+     pipeline_override_reason="" \
+     state_version="1"
+   planned_closing_gates="{comma-separated subset of review-code,refactor,retro,ship after applying --from/--skip filters}"
+   bash {CWF_PLUGIN_DIR}/scripts/cwf-live-state.sh list-set . \
+     remaining_gates="$planned_closing_gates"
+   ```
+
+1. Initialize ambiguity ledger file (all modes):
+
+   ```bash
+   cat > "{session directory}/run-ambiguity-decisions.md" <<'EOF'
+   # Run Ambiguity Decisions
+   mode: {resolved_mode}
+   open_blocking_count: 0
+   open_non_blocking_count: 0
+   updated_at: {ISO-8601 UTC}
+
+   | Decision ID | Stage | Question | Chosen Option | Blocking | Reversible | Follow-up |
+   |---|---|---|---|---|---|---|
+   EOF
+   ```
+
+1. Initialize stage provenance log file:
+
+   ```bash
+   stage_provenance_file="{session directory}/run-stage-provenance.md"
+   if [[ ! -f "$stage_provenance_file" ]]; then
+     cat > "$stage_provenance_file" <<'EOF'
+   # Run Stage Provenance
+   | Stage | Skill | Args | Started At (UTC) | Finished At (UTC) | Duration (s) | Artifacts | Gate Outcome |
+   |---|---|---|---|---|---|---|---|
+   EOF
+   elif ! grep -Fqx '| Stage | Skill | Args | Started At (UTC) | Finished At (UTC) | Duration (s) | Artifacts | Gate Outcome |' "$stage_provenance_file"; then
+     printf '\n| Stage | Skill | Args | Started At (UTC) | Finished At (UTC) | Duration (s) | Artifacts | Gate Outcome |\n|---|---|---|---|---|---|---|---|\n' >> "$stage_provenance_file"
+   fi
+   ```
+
+1. Report initialization:
+
+```text
+Pipeline initialized: {session_dir}
+Ambiguity mode: {resolved_mode}
+Stages: {list of stages to execute, with skipped ones marked}
+```
+
+---
+
+## Phase 2: Pipeline Execution
+
+Execute stages in order. Each stage invokes the corresponding CWF skill via the Skill tool.
+
+### Stage Definition
+
+| # | Stage | Skill Invocation | Gate | Auto |
+|---|-------|-----------------|------|------|
+| 1 | gather | `cwf:gather` | — | false |
+| 2 | clarify | `cwf:clarify` | T3 policy depends on ambiguity mode | false |
+| 3 | plan | `cwf:plan` | User approves plan | false |
+| 4 | review-plan | `cwf:review --mode plan` | Verdict-based | true |
+| 5 | impl | `cwf:impl --skip-clarify` | — | true |
+| 6 | review-code | `cwf:review --mode code` | Verdict-based | true |
+| 7 | refactor | `cwf:refactor` | — | true |
+| 8 | retro | `cwf:retro --from-run` | — | true |
+| 9 | ship | `cwf:ship issue` → `cwf:ship pr` (non-base branch) | User confirms PR | false |
+
+### Ambiguity Modes (Clarify T3 Policy)
+
+Use `live.ambiguity_mode` (resolved in Phase 1).
+
+| Mode | Clarify T3 handling | Merge policy |
+|---|---|---|
+| `strict` | Stop and ask user for every T3 decision | no extra blocking by mode |
+| `defer-blocking` | Decide autonomously, but persist unresolved decision debt | unresolved decision debt is merge-blocking at ship |
+| `defer-reversible` | Decide autonomously with reversible structure (flags/adapters/switch points) | track debt, non-blocking by default |
+| `explore-worktrees` | Implement alternatives in separate worktrees, then pick baseline | blocking depends on final unresolved debt |
+
+When mode is not `strict`, create/update `{session_dir}/run-ambiguity-decisions.md` whenever T3 debt exists using this minimum file contract:
+
+```markdown
+# Run Ambiguity Decisions
+mode: {mode}
+open_blocking_count: {integer}
+open_non_blocking_count: {integer}
+updated_at: {ISO-8601 UTC}
+
+| Decision ID | Stage | Question | Chosen Option | Blocking | Reversible | Follow-up |
+|---|---|---|---|---|---|---|
+| ... | clarify | ... | ... | yes/no | yes/no | issue/pr ref or TODO |
+```
+
+#### `explore-worktrees` operational flow
+
+Use the deterministic worktree creation/validation/reconcile flow from [references/stage-operations.md](references/stage-operations.md#explore-worktrees-operational-flow).
+
+### Stage Execution Loop
+
+For each stage (respecting `--from` and `--skip`), execute deterministic loop from [references/stage-operations.md](references/stage-operations.md#stage-execution-loop), including:
+- worktree consistency gate
+- live-state phase + remaining gate updates
+- best-effort session-log sync for `review-code|retro|ship`
+- stage invocation timing capture
+- clarify-stage ambiguity synchronization
+- run-closing artifact gate (`check-run-gate-artifacts.sh --strict`)
+- user/auto gate handling
+- mandatory stage-provenance row append for all outcomes
+
+### Review Failure Handling
+
+Use deterministic Revise/Fail handling from [references/stage-operations.md](references/stage-operations.md#review-failure-handling). Invariant: max 1 auto-fix attempt for `Revise`; `Fail` always hard-stops and requires explicit user decision.
+
+### --from Flag
+
+Follow deterministic precheck path in [references/stage-operations.md](references/stage-operations.md#--from-flag). `check-run-from-prereqs.sh` output is authoritative for prerequisite pass/fail.
+
+### --skip Flag
+
+Follow deterministic skip behavior in [references/stage-operations.md](references/stage-operations.md#--skip-flag).
+
+---
+
+## Phase 3: Completion
+
+After all stages complete (or the pipeline is halted):
+
+1. Run session completeness check:
+
+   ```bash
+   bash {CWF_PLUGIN_DIR}/scripts/check-session.sh --impl
+   session_dir=$(bash {CWF_PLUGIN_DIR}/scripts/cwf-live-state.sh get . dir)
+   stage_provenance_file=$(bash {CWF_PLUGIN_DIR}/scripts/cwf-live-state.sh get . stage_provenance_file)
+   gate_args=()
+   for closing_stage in review-code refactor retro ship; do
+     if awk -F'|' -v stage="$closing_stage" '
+       BEGIN { found=0 }
+       /^\|/ {
+         s=$2; outcome=$9
+         gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+         gsub(/^[[:space:]]+|[[:space:]]+$/, "", outcome)
+         if (s == stage && outcome != "Skipped") {
+           found=1
+         }
+       }
+       END { exit(found ? 0 : 1) }
+     ' "$stage_provenance_file"; then
+       gate_args+=(--stage "$closing_stage")
+     fi
+   done
+
+   if [[ "${#gate_args[@]}" -gt 0 ]]; then
+     bash {CWF_PLUGIN_DIR}/scripts/check-run-gate-artifacts.sh \
+       --session-dir "$session_dir" \
+       "${gate_args[@]}" \
+       --strict \
+       --record-lessons
+   else
+     echo "No run-closing stages were executed; skip final run-closing artifact gate."
+   fi
+   ```
+
+   If any FAIL items are reported, fix them before proceeding; this is a forced function and the pipeline is not complete until all checks pass. If gate output includes `Retro soft-gate omissions (PERSISTENCE_GATE=SOFT_CONTINUE)`, copy those items into the final pipeline summary under `Retro Gate Follow-ups` (do not compress into a generic warning).
+
+1. Update state:
+   - Clear pending gates first:
+     `bash {CWF_PLUGIN_DIR}/scripts/cwf-live-state.sh list-set . remaining_gates=""`
+   - Set final phase and clear active pipeline:
+     `bash {CWF_PLUGIN_DIR}/scripts/cwf-live-state.sh set . phase="done" active_pipeline="" user_directive="" pipeline_override_reason="" blocking_decisions_pending="false"`
+   - Ensure the current session entry in `cwf-state.yaml` stays consistent with final artifacts/summary (registration is initialized during Phase 1 bootstrap)
+1. Report pipeline summary:
+
+```markdown
+## Pipeline Complete
+
+### Stages Executed
+| Stage | Status | Notes |
+|-------|--------|-------|
+| gather | completed | — |
+| clarify | completed | — |
+| plan | completed | — |
+| review-plan | Pass | — |
+| impl | completed | 3 commits |
+| review-code | Conditional Pass | 1 concern addressed |
+| refactor | completed | docs/skills drift check |
+| retro | completed | — |
+| ship | skipped | --skip flag |
+
+### Artifacts
+- Plan: {path to plan.md}
+- Lessons: {path to lessons.md}
+- Retro: {path to retro.md}
+- Stage provenance: {session_dir}/run-stage-provenance.md
+- Session dir: {session_dir}
+
+### Retro Gate Follow-ups
+- {none | each retro soft-gate omission from check-run-gate-artifacts output}
+```
+
+---
+
+## Rules
+
+1. **Decision #19 baseline**: Pre-impl stages require human gates and post-impl stages chain automatically. Ambiguity defer modes are explicit, scoped overrides for clarify-stage T3 debt only.
+1. **One auto-fix attempt**: Never loop more than once on a review failure. Escalate to user after 1 retry.
+1. **Skill invocation only**: Use the Skill tool to invoke CWF skills. Do not inline skill logic.
+1. **State tracking**: Use `cwf-live-state.sh set` and `list-set` at every stage transition so session-local live state stays current while root summary remains synchronized.
+1. **Preserve skill autonomy**: Each invoked skill manages its own sub-agents, artifacts, and output. `cwf:run` orchestrates but does not micromanage.
+1. **Flags compose**: `--from impl --skip retro` is valid. Apply both filters.
+1. **Graceful halt**: When the user chooses "Stop", update state and report what was completed. Do not leave state in an inconsistent phase.
+1. **Do not bypass impl branch gate by default**: `cwf:run` must not pass `--skip-branch` to `cwf:impl` unless the user explicitly requests bypass.
+1. **Context-deficit resilience**: On resume/restart, reconstruct stage context from `cwf-state.yaml`, session artifacts, and handoff docs before invoking downstream skills.
+1. **Worktree consistency gate**: During an active pipeline, if current worktree root diverges from `live.worktree_root`, stop immediately and request explicit user decision before any write/edit/ship action.
+1. **Fail-closed run gates**: While `active_pipeline="cwf:run"` and `remaining_gates` includes `review-code`, ship/push/commit intents must be blocked unless `pipeline_override_reason` is explicitly set.
+1. **Artifact gate is mandatory for stage closure**: `review-code`, `refactor`, `retro`, and `ship` are not complete unless `check-run-gate-artifacts.sh --strict` passes for that stage.
+1. **Setup readiness is mandatory before run init**: `cwf:run` must execute `check-setup-readiness.sh` and halt with `WAIT_INPUT` when prerequisites are missing.
+1. **Ambiguity mode precedence**: `--ambiguity-mode` flag overrides config. Config (`CWF_RUN_AMBIGUITY_MODE`) overrides built-in default (`defer-blocking`).
+1. **Defer modes require persistence**: Any non-`strict` T3 carry-over must be recorded in `{session_dir}/run-ambiguity-decisions.md` and synchronized to `live.blocking_decisions_pending` via `sync-ambiguity-debt.sh`.
+1. **defer-blocking merge discipline**: If unresolved blocking debt exists, ship must treat it as merge-blocking until linked issue/PR follow-up is recorded and blocking count reaches zero.
+1. **Per-stage provenance is mandatory**: Every stage outcome (`Proceed`/`Revise`/`Fail`/`Skipped`/`User Stop`) must append a provenance row, including early-stop paths before halt/return.
+1. **Review `Fail` is not `Revise`**: `Fail` halts automation immediately and requires explicit user direction before any downstream stage.
+1. **Run-start branch creation is mandatory**: When `cwf:run` starts on the resolved base branch, create/switch to a dedicated feature branch before editing.
+1. **Non-base ship must create issue and PR**: When the active branch is not the resolved base branch, ship stage must execute issue creation and PR creation (or report existing URLs) instead of stopping at status-only output.
+
+## References
+
+- [agent-patterns.md](../../references/agent-patterns.md) — Shared agent orchestration patterns
+- [plan-protocol.md](../../references/plan-protocol.md) — Session artifact location/protocol
+- [check-setup-readiness.sh](../../scripts/check-setup-readiness.sh) — Deterministic setup preflight guard for `cwf:run`
+- [check-run-from-prereqs.sh](../../scripts/check-run-from-prereqs.sh) — Deterministic `--from` prerequisite gate for stage resume safety
+- [references/stage-operations.md](references/stage-operations.md) — Detailed stage loop, ambiguity worktree flow, and review-failure handling

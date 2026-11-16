@@ -1,0 +1,166 @@
+# Changelog
+
+## [0.0.20] - 2026-11-16
+
+1. Description names the renamed `sentimony/skills` skill `received-review` (was `review-resolution`).
+
+## [0.0.19] - 2026-11-16
+
+1. `reply_disposition.py` accepts the finding headings the Auto Reviewer posts now: the colored glyph with `High`, `Medium` or `Low` (`$\color{green}◎$ Low R1-F1`), the older `\bigcirc` glyph and the badge image, besides the bold `**Minor** R1-F1` form. Each form maps to the ledger severity (`Critical`/`High`, `Important`/`Medium`, `Minor`/`Low`); a mismatch with the ledger still stops with `root_mismatch`.
+
+## [0.0.18] - 2026-11-14
+
+1. The per-phase round budget is counted by `cr-request/scripts/round_budget.py`; the skill points to it instead of repeating the phase rules. Behavior is unchanged (`20261030-0851`).
+
+## [0.0.17] - 2026-11-13
+
+1. Flat layout: reference files moved next to SKILL.md; no content change.
+
+## [0.0.16] - 2026-11-13
+
+1. `Next step` inside a review loop needs no user decision under `--auto`; agreed independent work starts in the same turn while a transition awaits the user (`20261024-2324`).
+2. `## Scoped tree` recipe added to the shared `tree-fingerprint.md` copy.
+
+## [0.0.15] - 2026-11-13
+
+1. Description rewritten as a thesis followed by `Use when ...` without `You MUST`, cutting
+   its context cost (`20261111-2220`).
+
+## [0.0.14] - 2026-11-12
+
+1. The automatic review budget is kept per phase, `document` (spec, plan, prose and their
+   re-reviews) and `code` (implementation and its re-reviews), with the journal form
+   `Round review <n>: [document|code] <cause>`; one explicit user round count covers both
+   phases (`20261030-0851`).
+
+## [0.0.13] - 2026-11-10
+
+1. Name unexpected tracked or untracked changes left by a check, such as an updated
+   snapshot or a formatter autofix, instead of accepting or reverting them silently, and
+   treat a generic external API failure as unproven until the job, phase, operation, and
+   durable readback are known (`20261029-2036`).
+
+## [0.0.12] - 2026-11-09
+
+1. Point Auto Reviewer transport references to the central contract.
+
+## [0.0.11] - 2026-11-07 - [0.0.22](https://github.com/sentimony/agentic-workflow/releases/tag/v0.0.22)
+
+1. Name the skill in the `Next step` line as inline code in the host's invocation form
+   (`/<skill>` in Claude Code, `$<skill>` in Codex), with `none` kept plain (`20261024-2217`).
+
+## [0.0.10] - 2026-11-04 - [0.0.20](https://github.com/sentimony/agentic-workflow/releases/tag/v0.0.20)
+
+1. Require a repository search for old rule or contract wording, updates to applicable
+   current copies, and the search command and result as resolution evidence.
+
+## [0.0.9] - 2026-11-01
+
+1. Use the shared manual/auto stage transition contract and return orchestrated results
+   to resolve-issue; preserve current permissions, critical user decisions and delivery gates.
+
+## [0.0.8] - 2026-11-01 - [0.0.17](https://github.com/sentimony/agentic-workflow/releases/tag/v0.0.17)
+
+1. Preserve strict pre-execution review selection through a durable invocation binding.
+2. Validate accepted fixes/commits against original evidence and capture post-fix
+   identity separately; require fresh verification for the resulting tree.
+
+3. Route explicit standalone delegation through the installed workflow owner adapter.
+4. Require one current-task review with matching identity, original finding decisions
+   and the return block; ask before ambiguous intake or block stale evidence.
+
+5. Retire active cross-cr routes in favor of standalone cross-agent and its
+   workflow owner, preserving review round and reviewer continuity.
+
+## [0.0.7] - 2026-10-30
+
+- Align review intake and gate evidence, and provide a bounded, idempotent host helper
+  for authorized automatic REJECT replies.
+- Keep accepted defer issues and replies authored by yngwald, with a separate API-only
+  resolver acting as `github-actions[bot]` and independent completion readback before
+  the gate closes; preserve source-author checks and accept earlier resolve actors.
+
+## [0.0.6] - 2026-10-29
+
+- `--auto` in the arguments starts the next local step (`verify`, `plan-craft`) in the
+  same turn; it stops on a user decision, the Round rule, `ESCALATE`, `INCOMPLETE` or
+  `BLOCKED`, and before the `finalize` choice; a chain that `finalize`, `cross-cr`, or
+  `plan-craft` started returns to that skill.
+- Each round's fixes and record lines are committed locally as
+  `Address R<n> findings: <IDs>`, with only the session's own paths and under the commit
+  policy of the user's and project's instructions.
+- The Round rule counts only automatic rounds; a round the user starts past the limit runs
+  once and is recorded with a `Ruling`; the same cause twice always escalates.
+- An `ESCALATE` no longer holds back independent records, and it stays open in `Blocking`
+  across rounds until a `Ruling: R<n>-F<k> escalation decided` line closes it.
+- A `Ruling: R<n>-F<k> superseded by ...` line records an accepted fix that a later task,
+  finding, or marker removed on purpose.
+- Failing checks are classed as `caused by fix`, `pre-existing`, `environment`, `flaky`,
+  or `tool unavailable`; only a passing check resolves a finding. A test is shown to fail
+  without its fix in a temporary detached worktree, never with `git stash`.
+- A ruling to leave code as it is leaves a durable trail (a comment by the line and, for
+  the owner's decision or after the user's yes, a sentence in `AGENTS.md`); the return
+  block gains `Durable rulings: <paths or none>`.
+- Without a plan, record lines go to the spec's `## Verification record`, and appending
+  there does not reset the spec's approval. The anchor uses the `## Committed tree`
+  fingerprint recipe; a review of an uncommitted boundary keeps its identity only while
+  `HEAD` and the uncommitted state (without the record host, by the same commands as
+  `cr-request`) are unchanged. `Previous verification` is `stale` whenever `Changed paths`
+  is not `none`, and only a `Commits` line that says `allowed` or `forbidden` answers the
+  commit-policy question.
+- The argument may be several review paths (the `cross-cr` findings line lists one per
+  reviewer), or `PR #<n>`, the form the CI review's `Next step` line passes: the
+  latest review on that pull request, the CI auto-review by default, read through a tool
+  the user already configured.
+
+## [0.0.5] - 2026-10-28
+
+- The fingerprint recipe in `references/tree-fingerprint.md` records the full object ID
+  (40 hex characters in a SHA-1 repository, 64 in a SHA-256 one) and removes its
+  temporary index with a `trap` on exit.
+
+## [0.0.4] - 2026-10-27
+
+- The approval invariant says that after the new yes `plan-craft` revises the existing
+  plan in place instead of writing a second one (review R1-F1 on PR #14).
+- An accepted fix that materially changes an approved spec sets its `Status` back to
+  `draft` in the same edit and routes to `specify`, which asks for a new explicit yes; a
+  typo-level fix keeps `approved`. A new `Approval invariant` section is shared with
+  `specify`, `plan-craft`, and `implement` (request 20261027-0206).
+- Journal lines go inside the record's `text` block, before its closing fence, never
+  after it (request 20261025-1800).
+
+## [0.0.3] - 2026-10-27
+
+- Rename only: the plugin `awf` is now `aw`; version bump only, the text is unchanged.
+
+## [0.0.2] - 2026-10-22
+
+- Description opens with "You MUST use this when", names the trigger contexts (review
+  findings, PR comments, CI or static-analysis output, reviewer suggestions), and states
+  that the skill replaces devflow review-resolution.
+- Identity record gains `Tree: <fingerprint>` from the shared tree fingerprint recipe
+  (`references/tree-fingerprint.md`); decisions are bound to it.
+- The report ends with the chain return block (changed paths, previous verification,
+  checks to rerun, re-review, blocking and deferred items, rulings, route) and a
+  `Next step` line; a document variant covers spec and plan reviews.
+- With a known plan, appends `Received`, `Ruling`, `Deferred`, and `Round` lines to its
+  execution record.
+- Step 8 uses the shared Round rule and the `Round review <n>` journal counter instead of
+  its own limits; a re-review always goes to a fresh reviewer with a full brief.
+- Idempotent repeat call on an already resolved review, reviewer-prefixed IDs
+  (`R<n>-F<k>`, `R<n>-<reviewer>-F<k>`), owner and tracking place required for `DEFER`,
+  triage order, a ruling for every set-aside row, and evidence forms for findings on a
+  spec or plan.
+- New `references/return.md`; cr-request result fields and dispositions move to
+  `references/records.md` to keep the body short.
+
+## [0.0.1] - 2026-10-18
+
+- First release under this name; awf 0.0.2 shipped the same skill as `cr-receive`.
+- Initial release: intake shaped by the cr-request result contract, anchoring findings to
+  the reviewed target, one record per finding, separate verification of claim and remedy,
+  five dispositions, dependency-ordered minimal fixes with per-finding evidence, a bounded
+  re-review loop, and factual replies.
+
+[0.0.9]: https://github.com/sentimony/agentic-workflow/releases/tag/v0.0.18

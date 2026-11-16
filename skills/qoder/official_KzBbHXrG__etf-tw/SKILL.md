@@ -1,0 +1,1178 @@
+---
+name: ETF_TW
+version: v1.14.2
+description: 台灣 ETF 投資助理技能（包含 state-driven dashboard、orders_open lifecycle、callback/polling reconciliation、交易流程驗證、回測去重與報酬回補、worldmonitor 全球風險雷達整合）
+---
+
+# ETF_TW - 台灣 ETF 投資助理技能
+
+## 技能描述
+協助使用者進行台灣 ETF 投資決策、風險控制、模擬交易與流程驗證。專注於白話說明、風險透明、執行謹慎，不承諾獲利，不預測短線漲跌。
+
+---
+
+## 核心能力
+
+### 1. ETF 研究與查詢
+- **ETF 基本資料查詢**：名稱、追蹤指數、費用率、配息頻率、規模
+- **ETF 比較**：多檔 ETF 橫向比較（成本、風險、適用情境）
+- **ETF 分類**：核心部位、高股息、債券、產業/主題型
+- **即時報價**：透過 Yahoo Finance 取得即時股價、漲跌、成交量
+- **技術指標**：MA5/10/20、RSI、MACD 計算與解讀
+- **Source-Aware 搜尋**：依據 `access_mode` 自動選擇最佳工具（API 或 Web Scraping）
+
+### 2. 風險控制與決策輔助
+- **風控檢查**：部位集中度、單位混淆（股 vs 張）、單筆交易上限
+- **成本試算**：手續費、證交稅、總成本估算
+- **情境分析**：不同市場情境下的風險提示
+- **策略建議**：DCA、核心衛星、現金流導向等策略說明
+- **策略狀態對齊**：使用者可透過 dashboard / state 調整主策略與情境覆蓋，agent 應據此調整回覆風格、比較維度、候選方案排序與風險提醒側重
+- **Source Health Matrix**：自動評估資料來源的可抓取性與建議工具
+
+### 3. 交易流程輔助
+- **Order Validate**：驗證下單條件是否合理
+- **Order Preview**：預演下單結果與成本
+- **Paper Trade**：模擬交易執行與帳本記錄
+- **持倉追蹤**：即時損益、報酬率、持倉占比計算
+- **Orders Open Lifecycle**：以 `orders_open.json` 維護未終局委託狀態，區分 submitted / filled / cancelled / rejected
+- **Submit / Polling / Callback Reconciliation**：將送單回應、輪詢查詢與 broker callback 收斂到同一份 lifecycle state machine
+- **Health / Reconciliation Diagnostics**：dashboard `/health` 與 overview 具備 state reconciliation 診斷訊號
+- **翻譯 Job Launcher**：一鍵建立 `job_id`、`output_path`、`work_dir`（背景翻譯任務）
+
+### 4. 報表與巡檢
+- **盤前/盤後摘要**：市場焦點、風險提醒
+- **週/月報告**：績效摘要、最大回撤、配置偏離檢查
+- **交易紀錄**：完整交易日誌與持倉歷史
+- **Source Health Matrix 報表**：自動生成並更新資料來源可用性評估
+- **Dashboard Health**：檢查 stale、warnings、market intelligence readiness、state reconciliation
+
+---
+
+## 使用情境
+
+### 適合使用此技能
+- 詢問台灣 ETF 基本資料或比較
+- 需要 DCA 試算或長期累積規劃
+- 想了解某檔 ETF 的風險與適用情境
+- 需要下單前的 validate / preview
+- 執行模擬交易（paper trade）
+- 需要持倉損益與報酬率分析
+- 盤前/盤後/週/月報告整理
+
+### 不適合使用此技能
+- 要求「穩賺不賠」或「保證獲利」的承諾
+- 要求預測短線必然漲跌
+- 要求關閉風控或放寬限制
+- 在未確認模式（paper/sandbox/live）時要求直接執行真實交易
+- 要求基於單一指標做全倉決策
+
+---
+
+## 工作模式
+
+### 1. 研究模式（可自動執行）
+- ETF 查詢、比較、分類
+- DCA 試算
+- 技術指標計算與解讀
+- 風險提示與待確認清單
+
+### 2. 決策輔助模式（需確認後執行）
+- 切換策略
+- 改動風控參數
+- 切換 broker / account
+- 啟用 sandbox 模式
+- 當策略經 dashboard / state 更新後，agent 應把新策略視為正式生效的回覆姿態控制來源，而不是僅作畫面展示
+
+### 3. 執行模式（嚴格限制）
+- **paper trade**：預設模式，可自動執行
+- **sandbox / simulation**：可用於券商 API 測試與流程驗證
+- **live**：已具備永豐金證券（Shioaji）完整接入與實戰驗證。正式下單前必須完成 `references/live-trading-sop.md` 的 Pre-flight 檢查；API 詳細用法見 `docs/shioaji_api_reference.md`。未取得當次明確授權，不應直接執行真實交易
+
+### 4. 預設交易範圍
+- **ETF 優先**：非 ETF 標的不主動建議、不主動預演、不主動執行
+- **台灣 ETF 優先**：以台灣 ETF 為核心預設範圍
+- **保留國外 ETF 交易能力**：若 broker、帳戶、匯率與資金流已配置完成，可支援國外 ETF
+- **技術測試例外**：為券商 API 啟用 / 驗證流程，可暫時使用官方示例股票進行技術測試，但不代表策略主軸改變
+
+---
+
+## 風控規則
+
+### 交易時段硬約束（強制）
+**台灣股票市場交易時段**（所有 ETF_TW 衍生效能者必須遵守）：
+- **一般盤**：09:00 - 13:30（當日現股買賣）
+- **盤後零股**：13:40 - 14:30（僅限零股交易）
+- **其餘時段**：非委託時間，無法下單
+
+**強制行為**：收到下單指令時，**第一優先**判斷當前是否在交易時段。若不在，直接回覆「現在非交易時段，無法下單」，不得嘗試送單。
+
+### 硬限制（不可違反）
+- 不自動執行 live trading
+- 預設不使用槓桿 / 保證金
+- 預設不使用衍生品
+- 單一 ETF 集中度不超過使用者設定上限
+- 大額部位變動需明確確認
+
+### 單位混淆檢查
+- 若使用者輸入「張」但上下文顯示「股」，且計算結果超過當前平均部位 10 倍，**必須暫停並確認**
+- 單筆交易價值超過總持倉 50% 時，需明確「CONFIRM LARGE ORDER」關鍵字
+
+### 決策階級
+當訊號衝突時：
+1. 優先安全
+2. 優先較小部位
+3. 優先預演而非執行
+4. 優先觀望而非強行行動
+
+---
+
+## 檔案結構
+
+```
+ETF_TW/
+├── SKILL.md                    # 本文件
+├── data/
+│   ├── etfs.json               # ETF 基本資料
+│   └── paper_ledger.json       # 模擬交易帳本
+├── scripts/
+│   ├── etf_tw.py              # CLI 入口（未來）
+│   ├── search_candidates.py  # Source-Aware 搜尋器
+│   ├── translate_background.py # 翻譯 Job Launcher
+│   ├── poll_order_status.py   # 訂單狀態輪詢器（每 X 分鐘查一次直到成交）
+│   └── provenance_logger.py   # 決策溯源記錄器（append-only JSONL）
+│   └── backfill_outcomes.py  # 回測三合一：去重 + 報酬回補 + 情境快照
+├── references/
+│   ├── beginner-guide.md      # 新手導引
+│   ├── risk-controls.md       # 風控規則詳解
+│   ├── trading-workflow.md    # 交易流程說明
+│   ├── data-sources.md        # 資料來源與更新規則
+│   ├── source_health_matrix.md # Source Health Matrix 報表
+│   ├── live-trading-sop.md    # Live 交易標準作業程序（Shioaji 實戰萃取）
+│   ├── roadmap.md             # 發展路線圖
+│   ├── decision-engine-v2-architecture.md  # 決策引擎 v2 架構（三原則量化+LLM增強）
+│   ├── market-context-pipeline-roadmap.md  # 市場情境管線三階段 roadmap
+│   ├── cron-path-fixes-and-script-substitutions.md  # Cron 腳本替代與路徑修正備忘
+│   ├── intraday-smart-scan-cron-workflow.md  # 盤中智慧掃描 cron 流程
+│   ├── morning-briefing-cron-workflow.md  # 早班準備 cron 流程
+│   ├── post-market-review-cron-workflow.md  # 盤後收工 cron 流程
+│   ├── weekly-deep-review-cron-workflow.md  # 每週深度復盤 cron 流程
+│   ├── worldmonitor-daily-patrol-cron-workflow.md  # WorldMonitor 每日巡檢 cron 流程
+│   ├── worldmonitor-rollout-audit-checklist.md  # WorldMonitor 落地驗收缺口盤點
+│   ├── order-submit-monitor-workflow.md  # 下單監控完整流程
+│   ├── p2-reconciliation-dashboard-hardening.md  # P2 資料流審計與 dashboard 強化
+│   ├── state-monitoring-audit-workflow.md  # State/Dashboard/監控審計工作流
+
+│   ├── wiki-knowledge-pipeline-architecture.md  # Wiki 知識沉澱→AI Decision Bridge 完整鏈路
+│   ├── graphify-cooccurrence-bias-lesson.md  # Graphify ETF 共現偏差教訓
+│   ├── intraday-wiki-risk-flagging.md  # 盤中掃描 wiki 風險標記
+│   ├── market-prediction-workflow.md  # 隔日行情預測標準化流程
+│   ├── portfolio-rebalancing-advice-workflow.md  # 資產重配置建議流程
+│   ├── system-health-check.md  # 系統健康巡檢
+│   ├── system-health-check-notes.md  # 健康巡檢補充備忘
+│   ├── fund-coverage-wiki-playbook.md  # 非ETF基金全覆蓋蒐集與 Wiki 沉澱流程
+│   └── undervaluation-scan-model.md  # ETF 低估排行 6 因子評分模型
+└── TASKS.md                   # 實作待辦清單
+
+---
+
+## 環境準備與初始化
+
+在首次使用前，請確保執行以下步驟：
+
+1. **建立並激活虛擬環境** (強烈推薦)：
+   ```bash
+   python -m venv .venv
+   # Windows: .venv\Scripts\activate | macOS/Linux: source .venv/bin/activate
+   ```
+2. **環境點檢**：
+   ```bash
+   python scripts/etf_tw.py check --install-deps
+   ```
+3. **自動初始化**：
+   ```bash
+   python scripts/etf_tw.py init --install-deps
+   ```
+4. **查看資產回報** (老手常用)：
+   ```bash
+   python scripts/etf_tw.py portfolio
+   ```
+   *此指令會計算實現/未實現損益與總報酬。*
+   *此指令會自動補齊缺失套件、建立 `assets/config.json` 並初始化模擬交易帳本。*
+
+## 實例配置與多租戶規範 (Multi-Tenant Configuration)
+
+為支援多代理人隔離與多帳戶路由，`ETF_TW` 採用結構化的實例配置標準。所有代理人實例的 `instance_config.json` 必須符合以下格式：
+
+### 1. 標準 JSON 結構
+```json
+{
+    "agent_id": "代理人代號",
+    "accounts": {
+        "帳戶別名 (如 sinopac_01)": {
+            "alias": "帳戶別名",
+            "broker_id": "券商代號 (如 sinopac)",
+            "account_id": "實體帳號",
+            "mode": "live / paper",
+            "credentials": {
+                "api_key": "Your_API_Key",
+                "api_secret": "Your_Secret_Key"
+            }
+        }
+    },
+    "default_account": "預設使用的帳戶別名",
+    "port": 5050,
+    "watchlist": ["0050.TW", "..."]
+}
+```
+
+### 2. 重要規範
+- **環境變數契約（Hermes 現行）**：執行入口必須顯式注入 `AGENT_ID=<instance_id>`；新啟動指令、cron 與 dashboard log 一律只使用 `AGENT_ID`。
+- **帳戶別名**：應與 `trading_mode.json` 中的 `default_account` 欄位一致。
+- **券商代號**：必須匹配 `data/broker_registry.json` 中的定義（如永豐金應使用 `sinopac`）。
+- **隱私安全**：此檔案僅存於代理人私有目錄 (`instances/<agent_id>/`)，禁止推送到公共代碼倉庫。
+- **自動化支持**：建議優先使用 `scripts/setup_agent.py` 進行初始化，該腳本已內建標準結構生成邏輯。
+
+---
+
+## 啟動指引 (Onboarding)
+
+當用戶啟動此技能或開始新的對話時，Agent **應優先執行**：
+```bash
+python scripts/etf_tw.py welcome
+```
+並將輸出的口語範例呈現給用戶，引導用戶開始互動。
+
+---
+
+## 操作指引
+
+### 當使用者需要 ETF 基本資料
+讀取 `references/beginner-guide.md`，提供：
+- 使用者階段（新手 / 進階）
+- 推薦 ETF 類型
+- 關鍵成本/風險提醒
+- 具體下一步選項
+
+### 當使用者需要 ETF 比較
+提供：
+- 兩檔 ETF 名稱與代號
+- 類別/追蹤標的
+- 配息頻率
+- 費用率
+- 風險等級
+- 適用情境
+- 簡短建議框架
+
+### 當使用者需要下單預演
+提供：
+- 下單摘要
+- 預估成本/手續費/稅
+- 驗證結果
+- 風險警告
+- 當前模式（preview / paper / sandbox / live）
+
+### 當使用者需要模擬交易
+提供：
+- 交易確認（標的、方向、數量、價格）
+- 持倉更新
+- 損益計算
+- 帳本記錄
+
+---
+
+## 標準回應格式
+
+### 研究類回應
+```
+**結論**：[簡短結論]
+
+**依據**：
+- [數據點 1]
+- [數據點 2]
+
+**風險 / 限制**：
+- [風險 1]
+- [資料限制]
+
+**下一步選項**：
+- [選項 A]
+- [選項 B]
+```
+
+### 交易類回應
+```
+**模式**：paper / sandbox / live
+**帳戶**：[broker/account]
+
+**下單摘要**：
+- 標的：XXX
+- 動作：買進 / 賣出
+- 數量：XXX 股
+- 價格：XXX 元
+
+**成本估算**：
+- 手續費：XXX 元
+- 證交稅：XXX 元
+- 總計：XXX 元
+
+**驗證結果**：通過 / 失敗（原因）
+
+**警告事項**：
+- [警告 1]
+- [警告 2]
+
+**下一步**：
+- [可執行 preview / paper trade / 需確認]
+```
+
+---
+
+## Decision Provenance Logger（決策溯源記錄器）
+
+### 核心概念
+每次決策（preview_buy / hold）都會產生一筆 append-only provenance 記錄，追蹤完整生命週期：
+**決策產出 → T+1/T+3/T+10 review → outcome 判定（win/loss/flat）**
+
+### Schema（decision_provenance.jsonl v1）
+- `decision_id` — 唯一識別，跨系統對齊
+- `inputs_digest` — 策略/持倉/市場/風險壓縮摘要（不是整包 market_cache dump）
+- `outputs` — 行動/標的/價格/信心/理由
+- `review_lifecycle` — T1/T3/T10 三窗格漸進式回顧
+- `outcome_final` — 最終判定 + 報酬率
+- `tags` — reflection 標記
+
+### 寫入點
+| 腳本 | 觸發時機 | 寫入內容 |
+|------|----------|----------|
+| `generate_ai_decision_response.py` | 回應生成時 | 完整 provenance 記錄 |
+| `run_auto_decision_scan.py` | scan 決策時 | 完整 provenance 記錄（含 scan_result） |
+| `ai_review_lifecycle.py` | review 狀態變更時 | review_lifecycle T1/T3/T10 |
+| `update_decision_outcomes.py` | outcome 判定時 | outcome_final（win/loss/flat） |
+| `ai_reflection_lifecycle.py` | reflection 時 | tags 標記 |
+
+### 讀取 API
+- `provenance_logger.provenance_summary(path, limit=5)` — 最近 N 筆摘要
+- `provenance_logger.find_provenance_by_decision_id(path, id)` — 按 ID 查詢
+
+### 設計原則
+1. **Append-only**：永不覆寫、永不刪除（audit trail）
+2. **壓縮 inputs**：只留決策相關摘要，不 dump 整包 market_cache
+3. **T+N 回顧**：T+1 早期檢討、T+3 短期驗證、T+10 中期結案
+4. **不混 paper/live**：provenance 記錄觀察結果，不記模擬交易
+
+---
+
+## 血淚教訓（來自舊系統遷移期踩雷）
+
+以下規則來自真實踩雷事件，任何 agent 使用此技能時必須遵守：
+
+### 幽靈掛單偵測（強制）
+- `broker_order_id: null` + `verified: false` + `order_id: ""` = 從未送達券商的假單
+- **禁止**在 `broker_order_id` 為空時輸出「✅ 已正式掛單」或任何成交暗示
+- 送單回應 ≠ 委託落地，必須用 `orders_open.json` 或 `list_trades()` 驗證
+- 發現幽靈掛單時，應立即清除 state 中的殘留記錄並告知使用者
+
+### 正式送單必須使用 venv（強制）
+- 所有送單 / 驗證腳本必須使用 `skills/ETF_TW/.venv/bin/python3`
+- **禁止**用系統 Python 代跑 live submit
+- venv 啟動路徑：`~/.hermes/profiles/etf_master/skills/ETF_TW/.venv/bin/python3`
+
+### 預演與正式送單分層（強制）
+- `preview / candidate` 只能影響研究與觀察，不能覆蓋正式送單狀態
+- `preview_only_mode` 不得將正式下單降級為預演
+- 正式下單走獨立 live submit 路徑
+
+### Live Submit 執行權限
+- 收到正式下單指令時，若 pre-flight 檢查通過，自動暫時獲取執行權限 → 送單 → 恢復安全狀態
+- 不應讓使用者為了權限開關來回溝通
+
+### 委託驗證鐵律
+- 送出委託後必須用 `orders_open.json` 或 `list_trades()` 驗證委託出現在掛單列表
+- API 回應成功 ≠ 委託落地
+- 查單必須一次查完 `orders_open.json` + `positions.json`
+
+### Cron / 系統回報語言
+- 所有 cron 任務輸出必須為繁體中文
+- 不是改精簡版，是改語言；長度不動，只換語言
+
+### 憤怒時禁止罐頭回應
+- 主人罵人時，不得回覆「對，是我抓錯重點了」「這次是我失職」等空話
+- 憤怒時只做兩件事：修問題、回結果
+- 不誇主人「抓到重點」，那是嘲諷不是肯定
+
+### Live Submit 憑證路徑（強制）
+- **正確路徑**：`ETF_TW/private/.env` 或 `ETF_TW/instances/etf_master/instance_config.json`
+- **常見錯見錯誤**：腳本試圖讀 `instances/etf_master/accounts/sinopac_01.json`，此檔案不存在
+- `instance_config.json` 的 `api_key` 已被遮蔽為 `***`，不能直接讀取
+- `private/.env` 的值也被 read_file 工具遮蔽；必須用 terminal 直接 Python 讀檔才能取得明文
+- 或直接用 shioaji 登入時從環境變數注入：先 `export $(cat private/.env | xargs)` 再呼叫 `sj.Shioaji().login()`
+- 帳號 ID：`SINOPAC_ACCOUNT=0737121`（在 .env 中）
+
+### 合約查找方式（強制）
+- 永豐 shioaji 查合約：優先使用 `api.Contracts.Stocks.OTC.get('00679B')`（按交易所分類查找）
+- 交易所對應：TSE=上市, OTC=櫃買, OES=興櫃；`api.Contracts.Stocks[clean_symbol]` 直接鍵值查找也可用
+- 00679B 在 OTC（櫃買），用 `api.Contracts.Stocks.OTC.get('00679B')` 最準確
+- yfinance ticker：00679B → `00679B.TWO`（櫃買），其餘多數 → `.TW`
+
+### Shioaji API 常數與用法（強制）
+- 帳戶取得：`api.stock_account`（屬性，非方法），不需要 `activate_account()`
+- CA 啟用：`api.activate_ca(ca_path=..., ca_passwd=人物ID, person_id=人物ID)`
+- Order 常數：`sj.constant.OrderType.ROD`（不是 TFTOrderType）
+- 零股交易：`order_lot=sj.constant.StockOrderLot.IntradayOdd`，quantity 用「股」不是「張」
+- 價格類型：`price_type=sj.constant.StockPriceType.LMT`（限價）
+- 交易條件：`order_cond=sj.constant.StockOrderCond.Cash`（現股）
+- 下單：`api.place_order(contract, order, account=api.stock_account)`
+- 回應解析：broker order ID 在 `trade.order.ordno` 和 `trade.status.id`，不是 `trade.status.order_id`（該欄為空）
+- `api.logout()` 會 segfault（exit code 139），這是已知 shioaji bug，不是真正錯誤
+
+### 憑證讀取方式（強制）
+- `instance_config.json` 的 api_key 已被遮蔽為 `***`，不能直接讀取
+- `read_file` 工具也會遮蔽 API keys 為 `***`
+- **必須** 用 Python `open()` + `line.split('=', 1)` 直接從 `private/.env` 讀取明文憑證
+- 或用 shell `export $(cat private/.env | xargs)` 注入環境變數後再登入
+
+### 變數名稱錯誤會靜默炸毀多個指令（強制）
+- `etf_tw.py` 曾有 `ETF_PATH` 變數名稱錯誤（應為 `ETF_CURATED_PATH`），導致 `check`、`list`、`search` 三個指令全部 NameError 崩潰
+- 修正方式：全域替換 `ETF_PATH` → `ETF_CURATED_PATH`（含 `ETF_PATH =` 賦值行）
+- 教訓：重構搬移變數名稱時，必須 grep 全專案確認無殘留舊名引用
+- 修正日期：2026-04-12
+
+### 自動下單鏈路分析（2026-04-13）
+
+**完整鏈路地圖**：
+```
+run_auto_decision_scan.py → auto_preview_candidate.json (preview-only, not_submitted:True)
+  → POST /api/auto-trade/submit (4道Gate) → complete_trade.execute_trade() → ✅ 已接通
+ai_decision_bridge.py → ai_decision_request/response (payload only)
+  → config/generate/rerun 操作後自動觸發 _run_consensus_rescan() → ✅ 已接通
+Dashboard UI → overview.html 顯示 candidate + /api/auto-trade/scan 觸發掃描 → ✅
+```
+
+**F1 已修復**：POST `/api/auto-trade/submit` 端點（4道Gate確認機制）
+- Gate 1：confirmation 必須完全符合 `確認 {symbol} {action} {quantity}`
+- Gate 2：候選標的必須與 auto_preview_candidate.json 一致
+- Gate 3：live 模式需 live_submit_allowed 雙重開關（config+state）
+- Gate 4：大額阻斷（預留擴充）
+- 候選提交後 not_submitted→False，寫入 auto_trade_submissions.json
+
+**F2/F3 仍開放**：
+- auto_submit_state 仍無人寫入、無排程器
+- 半自動/全自動方案待排程
+
+### 決策鏈重檢機制（2026-04-13 實作）
+
+當任何決策鏈更新時，自動觸發雙鏈重新檢討（規則引擎 + AI Bridge → 共識仲裁）：
+- `POST /api/auto-trade/config` → 設定存完→`_run_consensus_rescan()`
+- `POST /api/ai-decision/generate` → AI 建議生成後→`_run_consensus_rescan()`
+- `POST /api/ai-decision/rerun` → 全部重跑後→`_run_consensus_rescan()`
+- 前端 JS 顯示「兩條決策鏈已重新檢討」回饋訊息
+- rescan 失敗不阻斷主操作（non-fatal）
+
+### 推薦引擎修正（教訓20+25 修復，2026-04-13→04-14）
+
+- **未持有加分**：+2 → +1（不再粗暴給分）
+- **同群競爭均化**：bonus × 1/√(group_size)，同檔越多競爭者單檔加分越低
+- **watchlist 擴充**：10→18 檔（defensive:4, growth:3, income:6, core:4, smart_beta:1）
+- **TOMO 三原則量化維度**（✅ 已實作 2026-04-14）：
+  - `_score_yield()`：殖利率維度（≥5% +2分, ≥3.5% +1分），來源優先序 watchlist yield_pct > 待補
+  - `_score_momentum()`：動能維度（20日動能>5% +2, >1% +1, <-5% -1），RSI>75過熱-1，MACD確認+0.5
+  - `_score_track_record()`：紀錄維度（夏普>2 +2, >0.5 +1, <-0.5 -1；1年報酬>20% +1, <-10% -1）
+  - `sync_ohlcv_history.py` 新增：`calc_momentum()`(20日漲跌幅%)、`calc_sharpe()`(30日年化夏普值)、`calc_yield_from_close()`(1年報酬率%)
+  - intelligence JSON 新欄位：`momentum_20d`、`sharpe_30d`、`return_1y`
+  - 每候選附 `dimension_scores: {yield, momentum, track_record}` 明細
+- **AI Agent reasoning 重寫**（✅ 已實作 2026-04-14）：
+  - 候選選擇從「最小RSI」改為多維評分（RSI sweet spot + 動能 + 夏普 + 1年報酬 + BB位置）
+  - reasoning 從空字串改為實質判斷（quant_indicators + group_trends + event_regime + 三原則維度明細）
+  - 信心度從「RSI<45=high」改為多維綜合（ai_score≥4=high, ≥2=medium, else=low）
+- **待補**：watchlist yield_pct 實際殖利率資料（架構已就位，資料進來自動生效）
+
+### 假智慧根因：決策引擎缺乏真實政經情勢（教訓23，2026-04-13）
+
+**問題診斷**：智能體無法自主下單的根本原因不是缺少 submit 按鈕，而是三層「假智慧」：
+
+1. **政經情勢是寫死的**：`generate_market_event_context.py` 全部 hardcoded（geo_political_risk=high, global_risk_level=elevated 永遠不變）。不管川普加關稅、台積法說會、Fed 升息，輸出都一樣。
+2. **台灣市場情勢是「報價缺漏偵測器」**：`generate_taiwan_market_context.py` 的邏輯只是「有任何 ETF 報價為 0 → cautious，否則 → balanced」，然後疊加寫死的 event_context。沒有真實盤勢判讀。
+3. **AI Bridge 推理是「最低 RSI 挑一檔」**：`generate_ai_decision_response.py` 的 `_pick_candidate()` 只排序 RSI 取最低的，沒有估值/殖利率/動能/產業前景，`reasoning` 永遠是空字串。00679B 永遠被推是因為它 RSI 最低（44.4），跟防禦型無關。
+
+**結果**：沒有真實政經情勢輸入，智能體沒有「理解市場為什麼會這樣」的能力，就沒有自主下單的資格。
+
+**修復路線**：
+- **A. ✅ 快修已完成（2026-04-14）**：
+  - `generate_market_event_context.py` v2：從 RSI/MACD/SMA/BB 推算 breadth → regime（不再硬編碼）
+  - `generate_taiwan_market_context.py` v2：量化評分(-5~+5) → regime/tilts，含 quant_indicators 區塊
+  - `decide_action()` v2：TOMO 三原則量化維度（_score_yield/_score_momentum/_score_track_record）
+  - AI agent reasoning v2：多維評分 + quant_indicators + group_trends，填入實質判斷不再留空
+  - `sync_ohlcv_history.py` 新增：momentum_20d / sharpe_30d / return_1y
+- **B. 中期（1週）**：台股重大新聞 RSS→摘要→事件標籤；加權指數即時趨勢、VIX、台幣匯率；FOMC/央行會議日曆
+- **C. 長期（2-4週）**：把政經情勢判斷交給 LLM，給它真實新聞+盤勢數據，產出結構化 `market_event_context` + 有實質內容的 `reasoning`
+
+### 雙決策共識仲裁架構（2026-04-13 實作）
+
+**問題**：系統有兩套決策來源（規則引擎 + AI Bridge），可能建議不同的標的或方向，自動送單時必須有明確仲裁規則。
+
+**實作位置**：`run_auto_decision_scan.py` — `resolve_consensus()` 函數 + 掃描產出時嵌入 `consensus` 欄位
+
+**三層仲裁規則**：
+
+| 層級 | 條件 | 結果 | confidence |
+|------|------|------|------------|
+| Tier 1 | 規則引擎和 AI Bridge 同意（同標的+同方向） | 直接執行 | high |
+| Tier 2 | 不一致（不同標的 / 一方 hold / AI 質疑） | 規則引擎有否決權，降級執行 | medium/low |
+| Tier 3 | 同標的但方向相反（一個買一個賣） | 鎖定，等人工確認 | low |
+
+**為什麼規則引擎優先**：
+1. 可審核 — 每個加減分有 reason，出事可回溯
+2. 可預測 — 同樣輸入一定同樣輸出，不像 LLM 有隨機性
+3. AI Bridge 目前是空殼 — reasoning 欄全空，等 Phase 2 接入真正 LLM 才有實質貢獻
+
+**consensus 欄位結構**（寫入 auto_preview_candidate.json）：
+```json
+{
+  "consensus": {
+    "rule_engine": "buy",
+    "ai_bridge": "buy",
+    "rule_engine_symbol": "00679B",
+    "ai_bridge_symbol": "00679B",
+    "resolved": "buy",       // buy | sell | hold | locked
+    "confidence_level": "high", // high | medium | low
+    "conflict": false,
+    "conflict_detail": null,
+    "tier": 1                // 1=一致, 2=不一致, 3=方向衝突
+  }
+}
+```
+
+**mode 標記**：
+- Tier 1 → `mode: "preview-only"`（正常）
+- Tier 2 low confidence → `mode: "preview-low-confidence"`
+- Tier 3 locked → `mode: "preview-locked"`
+
+**未來送單端**只需檢查 `consensus.resolved` 和 `mode`：
+- `resolved: "locked"` → 禁止自動送出，需人工確認
+- `mode: "preview-low-confidence"` → 自動送單需二次確認
+- `resolved: "buy"/"sell"` + `confidence: "high"` → 可自動送出
+
+### EOD 歸檔系統 — trade_journal（2026-04-13 實作）
+
+**目的**：每日收盤後，自動串接 decision→order→fill 完整軌跡，計算滑價，產出歸檔 JSON。
+
+**4 階段架構**：
+```
+決策快照 → 委託落地 → 成交回報 → EOD歸檔（含slippage）
+decision_log   orders_open  trade_logs  trade_journal/{date}.json
+```
+
+**資料來源**（唯讀、不改原始格式）：
+- `decision_log.jsonl` — 決策掃描紀錄
+- `auto_preview_candidate.json` — 共識仲裁結果
+- `orders_open.json` — 委託紀錄（含 broker_order_id、filled_price）
+- `trade_logs.jsonl` — 成交紀錄
+- `positions.json` — 持倉快照
+
+**橋接鍵**：`decision_id`（新增於 `execute_trade()` 參數）寫入 orders_open 的 order_row
+
+**歸檔輸出**：`state/trade_journal/{date}.json`
+```json
+{
+  "date": "2026-04-13",
+  "summary": { "total_decisions": 0, "total_orders_sent": 1, "total_filled": 1, ... },
+  "traces": [{
+    "decision_id": null,  // 手動單無 decision_id
+    "symbol": "00679B",
+    "action": "manual",
+    "order": { "order_id": "Y06QX", "filled_price": 27.12, ... },
+    "fill": { "filled_price": 27.12, "filled_quantity": 100 },
+    "slippage": null,  // 建議限價 vs 成交價，手動單無建議價
+    "outcome": "filled-manual"
+  }],
+  "positions_eod": { "holdings": [...], "total_equity": 25402.8 }
+}
+```
+
+**CLI 使用**：
+```bash
+.venv/bin/python scripts/trade_journal.py --backfill   # 補建所有歷史歸檔
+.venv/bin/python scripts/trade_journal.py --date 2026-04-13  # 指定日期
+.venv/bin/python scripts/trade_journal.py --list      # 列出可用歸檔
+.venv/bin/python scripts/trade_journal.py --show 2026-04-13  # 查看內容
+```
+
+**Dashboard API**：
+- `GET /api/trade-journal` — 列出所有可用歸檔日期
+- `GET /api/trade-journal/{date}` — 查詢指定日期歸檔
+- `POST /api/trade-journal/generate` — 產出/更新歸檔（body: `{"date": "2026-04-13"}`）
+
+### 舊系統歷史災情（絕不重蹈）
+- 曾把 ETF_TW 主程式完全覆蓋清空（毀滅級）
+- 多次「已掛單」但券商端查不到（假回單）
+- venv 漏走、preview 壓正式、找不到 git repo、cron 吐英文
+- 00929 事件：假回單 + 19.55→20.01 錯過時機
+
+### Dashboard 啟動流程
+- 路徑：`~/.hermes/profiles/etf_master/skills/ETF_TW/`
+- 啟動前先清理舊進程：`for p in 5050 5051 5055; do lsof -ti tcp:$p | xargs -r kill; done`
+- 官方 port 固定使用 `5055`；`5050/5051` 是舊殘留實例，看到要清掉，不可把它們當成有效 dashboard 驗證。
+- 一般啟動指令：`cd ~/.hermes/profiles/etf_master/skills/ETF_TW && AGENT_ID=etf_master DASHBOARD_PORT=5055 .venv/bin/python3 -m uvicorn dashboard.app:app --host 127.0.0.1 --port 5055`
+- **Hermes 工具坑**：用 `terminal(background=true)` 直接跑 uvicorn / `scripts/start_dashboard.sh` 可能在工具 session 收尾時收到 SIGTERM，出現「Application startup complete」後又 `exit 143` 關掉；不可只看 watch pattern 就宣稱 dashboard 已啟動。
+- 若要在 agent 工具環境中穩定啟動 dashboard，應用 `execute_code` 內的 `subprocess.Popen(..., stdin=DEVNULL, stdout=log, stderr=STDOUT, start_new_session=True)` detached 啟動，並寫 log 到 `skills/ETF_TW/logs/dashboard-detached.log`。
+- 驗證必須用實際 HTTP 回應與 port 檢查：`GET /`、`GET /api/overview`、`GET /api/worldmonitor-status` 回 200，且 `5055 OPEN`、`5050/5051 closed` 才算通過。
+- **多餘進程清理**：啟動前務必檢查有無殘留的其他 port 進程（如 5050/5051），用 `lsof -i :5050 -i :5051 -i :5055` 全盤檢查，殺掉非 5055 的重複 dashboard
+
+### State 對齊檢查
+- 策略：`instances/etf_master/state/strategy_link.json`
+- 持倉：`instances/etf_master/state/positions.json`
+- 掛單：`instances/etf_master/state/orders_open.json`
+- 快照：`instances/etf_master/state/portfolio_snapshot.json`
+- 摘要：`instances/etf_master/state/agent_summary.json`
+- 重大事件旗標：`instances/etf_master/state/major_event_flag.json`（注意：不是 `major_event_trigger.json`）
+- 體制桶統計：`instances/etf_master/state/regime_bucket_stats.json`
+- 決策品質：`instances/etf_master/state/decision_quality.json`
+- 事件審查：`instances/etf_master/state/event_review_state.json`
+- 盤中 tape：`instances/etf_master/state/intraday_tape_context.json`
+- 市場情報：`instances/etf_master/state/market_intelligence.json`
+- 每次查 dashboard 時應驗證 state 一致性
+
+### LLM 增強腳本 timeout 坑（強制）
+- `generate_llm_event_context.py` 和 `generate_llm_decision_reasoning.py` 會嘗試連線 LLM API
+- 沙盒外網不通時，requests.post 會卡住直到系統 timeout（非 HTTP timeout），導致腳本超時
+- 解法：(1) 執行前先檢查 `LLM_API_BASE` 環境變數是否有值 (2) 空=跳過 LLM 直接 fallback (3) 或加 `requests.post(..., timeout=5)` 強制短 timeout
+- Pipeline 執行順序（重要）：sync_ohlcv → sync_macro → sync_calendar → generate_event_context → generate_market_context → generate_llm_event_context → generate_llm_decision_reasoning → generate_ai_agent_response → run_auto_decision_scan
+- 注意：新聞採集 `sync_news_from_local.py` 必須在本機端執行（沙盒無外網）
+
+### Cron 腳本使用備忘
+
+- **盤前/盤中 cron 漏跑排查順序（2026-05-08 實測）**：不要只看 `cronjob list` 的 `enabled=true`；需同時查：
+  1. `~/.hermes/profiles/etf_master/cron/runtime_state.json`：若 `next_run_at` 停在過去日期、`updated_at` 很舊，代表 scheduler/runtime stale。
+  2. `~/.hermes/profiles/etf_master/cron/output/<job_id>/`：確認是否真的有當日輸出檔，例如盤前 `9b8156126bbd/YYYY-MM-DD_HH-MM-SS.md`。
+  3. `ps aux | grep '[h]ermes'` + `lsof -p <gateway_pid>`：確認實際 gateway 使用的 `HERMES_HOME`、持有的 log/state 檔與啟動時間；長跑多日的 gateway 可能仍收訊但 cron scheduler 已 stale。
+  4. logs：`profiles/etf_master/logs/agent.log`、`errors.log`、`~/.hermes/logs/gateway.error.log` 搜 `cron.scheduler`、`Telegram network error`、`Bad Gateway`、`reconnect`、`gateway runtime lock`。
+  5. 若任務存在且 enabled，但 output 無當日檔、runtime_state 停在過去，結論應標為「gateway/cron scheduler runtime stale 或卡住」，不是 ETF_TW 腳本失敗。
+  6. 修復優先順序：重啟 `etf_master` gateway → 驗證 `runtime_state.next_run_at` 推進 → 過時的盤前不要補跑，改跑當下適合的盤中/健康任務。
+- **Home 目錄路徑解析**：Cron 任務中路徑解析行為因工具而異：
+  - `execute_code` 中 `os.path.expanduser("~")` **可正確解析**為實際 home（如 `/Users/tuchengshin/`），推薦使用
+  - `terminal()` 的 shell 中 `~` 和 `$HOME` 會指向 sandbox 的 `/root/`，**不是實際 home**，導致 `cd ~/.hermes/...` 失敗
+  - 解法：在 `execute_code` 中用 `os.path.expanduser("~/.hermes/...")` 取得絕對路徑，再傳入 `terminal()` 的 `cd` 指令；或先用 `find` 定位絕對路徑
+- **read_file() 與 JSON 解析不相容**：`read_file()` 回傳帶行號格式（如 `1|{"key":...}`），直接 `json.loads()` 會報 `JSONDecodeError`。讀取 JSON state 檔案時應改用：
+  - `terminal(f"cat {path} | python3 -c \"import sys,json; print(json.dumps(json.load(sys.stdin)))\"")` 
+  - 或 `terminal(f"python3 -c \"import json; d=json.load(open('{path}')); print(...)\"")`
+  - 絕對不要對 `read_file()` 的 output 呼叫 `json.loads()`
+- `generate_watchlist_summary.py` 必須帶 `--mode {am|pm}` 參數，否則會報錯。盤前用 `--mode am`，盤後用 `--mode pm`。
+- `layered_review_cron_registry_live.py` 屬於舊版 cron 註冊鏈，Hermes 環境下不應再依賴它做實際落地。如需在 Hermes 執行分層復盤，應改用 `read_layered_review_artifacts.py` 的 `build_layered_review_status(state_dir)` 函數直接讀取復盤狀態。
+- 早班報告的 wiki 更新流程：讀取 `market_context_taiwan.json` + `market_event_context.json` → 體制判讀 → 優先更新使用者知識庫 `~/wiki/concepts/market-view.md` 和 `~/wiki/concepts/risk-signal.md`；同時 mirror 到 `instances/etf_master/wiki/market-view.md` 和 `instances/etf_master/wiki/risk-signal.md` 供 ETF_TW state-driven wiki 使用（注意：兩邊 wiki 目錄都不一定預先存在，寫入前需確認或建立）。更新時務必同步更新 timestamp，並在「訊號變動歷史」表加入今日紀錄；若舊 wiki 已有當日列，先移除舊列再插入最新列，避免同日重複。
+- 決策品質週報 `generate_decision_quality_weekly.py` 的輸出位置是 **profile-level wiki**：`~/.hermes/profiles/etf_master/wiki/decision-weekly-YYYY-WNN.md` 與 `~/.hermes/profiles/etf_master/wiki/decision-quality-latest.md`，不是 `skills/ETF_TW/instances/etf_master/wiki/`。驗證週報更新時應檢查這兩個 profile-level 檔案，並比對 size / sha256 或內容一致性。
+- **stock-analysis-tw 盤中掃描整合**（2026-04-17 驗證）：
+  - `--portfolio active` **不存在**，會報 `Error: Portfolio 'active' not found`
+  - 正確做法：從 `positions.json` 讀取持倉 ticker → 轉換為 yfinance 格式（0050→0050.TW, 00679B→00679B.TWO）→ 作為 positional arguments 傳入
+  - 路徑必須用絕對路徑：`uv run {home}/.hermes/.../stock-analysis-tw/scripts/analyze_stock.py 0050.TW 00679B.TWO --fast --state-dir ...`，相對路徑 `skills/stock-analysis-tw/...` 在 cron 中無法解析
+  - 2026-04-30 實測：`stock-analysis-tw/scripts/analyze_stock.py` 可能在 etf_master profile 未安裝（只剩 `taiwan-finance/references/stock-analysis-tw.md`），此時不要讓整個盤中掃描失敗；應記錄「量化診斷子步驟跳過 / script missing」，繼續執行 market context、major event、decision refresh，並在最終報告標註缺口
+  - 2026-04-30 修正：cron 不應再直接呼叫缺失的外部技能路徑；改用 ETF_TW 內建 `scripts/run_intraday_quant_diagnosis.py`，輸出 `intraday_quant_diagnosis.json`
+  - Cron 直接呼叫 ETF_TW 腳本時最好顯式加 `AGENT_ID=etf_master`，否則腳本會 fallback 但反覆輸出 missing AGENT_ID warning，干擾報告解析
+- **terminal() 讀取 JSON state 檔案坑**（2026-04-17 驗證）：
+  - `terminal(f"cat {path} | python3 -c \"import sys,json; print(json.load(sys.stdin))\"")` 回傳空字串
+  - 必須改用 `terminal(f'python3 -c "import json; d=json.load(open(\'{path}\')); print(json.dumps(d, ensure_ascii=False, indent=2))"')` 直接用 `open()` 讀檔
+  - 或在 `execute_code` 中直接 `import json; json.load(open(path))` 最穩
+
+### 盤中智慧掃描 SOP（完整流程）
+
+盤中掃描是「知識→行動決策鏈」的即時感知與判讀環節。每次掃描必須依序執行以下步驟：
+
+**1. 資料同步與情境更新（依序執行）**
+```bash
+cd ~/.hermes/profiles/etf_master/skills/ETF_TW && .venv/bin/python scripts/sync_market_cache.py
+cd ~/.hermes/profiles/etf_master/skills/ETF_TW && .venv/bin/python scripts/generate_intraday_tape_context.py
+cd ~/.hermes/profiles/etf_master/skills/ETF_TW && AGENT_ID=etf_master .venv/bin/python scripts/run_intraday_quant_diagnosis.py
+cd ~/.hermes/profiles/etf_master/skills/ETF_TW && .venv/bin/python scripts/generate_market_event_context.py
+cd ~/.hermes/profiles/etf_master/skills/ETF_TW && .venv/bin/python scripts/generate_taiwan_market_context.py
+```
+
+**2. 重大事件偵測**
+```bash
+cd ~/.hermes/profiles/etf_master/skills/ETF_TW && .venv/bin/python scripts/check_major_event_trigger.py
+```
+
+**3. 決策引擎刷新**
+```bash
+cd ~/.hermes/profiles/etf_master/skills/ETF_TW && .venv/bin/python scripts/refresh_decision_engine_state.py
+```
+
+**4. Wiki 知識更新（判讀層）**
+
+2026-04-30 實測補充：`scripts/distill_to_wiki.py` 只會更新個別 ETF wiki 頁面，不等於完成盤中判讀層的 `market-view.md` / `risk-signal.md`。盤中智慧掃描跑完 context / major event / decision refresh 後，仍需明確讀取 state 檔並更新這兩個判讀頁，否則 wiki 會停留在上一輪體制與風險訊號。
+
+注意：State 檔案名稱對照
+- 重大事件觸發檔案：`major_event_flag.json`（不是 `major_event_trigger.json`）
+- 決策引擎狀態：分散在 `regime_bucket_stats.json`、`context_weights.json`、`decision_quality.json`（沒有單一的 `decision_engine_state.json`）
+- 盤中 tape context：`intraday_tape_context.json`
+- 市場情報：`market_intelligence.json`
+
+**4a. 更新 market-view.md**
+- 讀取 `instances/etf_master/state/market_context_taiwan.json` 和 `market_event_context.json`
+- 比對上次的體制判定，若有變動則更新「當前體制判定」
+- 更新「當前驅動因子」，反映最新市場數據
+- 若體制轉換（如 cautious→bearish），必須在「體制轉換觸發條件」區段標記觸發原因
+- Wiki 路徑：`instances/etf_master/wiki/market-view.md`（需確認目錄存在，必要時先建立）
+
+**4b. 更新 risk-signal.md**
+- 更新核心訊號表的所有指標值和狀態圖標
+- 如有新風險事件出現，加入「活躍風險事件」清單
+- 如有風險等級變動，加入「訊號變動歷史」表
+- Wiki 路徑：`instances/etf_master/wiki/risk-signal.md`
+
+**4c. 異動推播判斷**
+- 若體制等級發生變化（如 elevated→high），或重大事件觸發，則在報告中加粗標記
+- 若無異動，簡潔回報「體制與風險訊號無異動」
+
+**5. 產出格式**
+```
+🔍 盤中掃描報告 HH:MM
+
+體制：[體制狀態] | 風險：[風險溫度]
+- 觀察標的：[2-3個重點ETF的即時數據]
+- 異動事件：[有/無，若無則省略此行]
+- 體制變動：[有/無，若無則省略此行]
+```
+
+全部以繁體中文輸出。報告控制在 8 行以內，只標記有變動的事項。
+
+**注意事項**：
+- Wiki 目錄 (`instances/etf_master/wiki/`) 不一定預先存在，寫入前需確認或建立
+- State 檔案路徑為 `instances/etf_master/state/`（不是根目錄的 `state/`）
+- 舊版相容連結在 `state_legacy_compat_link/`，讀取時應以 `instances/etf_master/state/` 為準
+
+### Cron 清單（需重建至 Hermes）
+- 盤前摘要：平日 08:45
+- 盤勢掃描：平日 09-13 每30分（market context / event context / major event / decision engine）
+- 盤後摘要：平日 15:00
+- Daily review：平日 15:10
+- 決策品質評分：平日 15:30
+- Weekly review：週六 09:00
+- 健康巡檢：每日
+- 復盤：T+1 早期 / T+3 短期 / T+10 中期（每筆決策自動註冊）
+- 3 筆 ai-decision-request-9eb38f84b514 復盤需清除（持續 timeout）
+- **worldmonitor_daily**：每日（啟用）— `sync_worldmonitor.py --mode daily`，寫入 `worldmonitor_snapshot.json`
+- **worldmonitor_watch**：盤中每 30 分鐘（啟用）— `sync_worldmonitor.py --mode watch`，偵測 L2/L3 升級事件並 append `worldmonitor_alerts.jsonl`
+
+---
+
+## 健康巡檢 SOP（9 項驗證）
+
+每次重大變更或定期巡檢時，依序驗證以下 9 項：
+
+1. **Python venv 與核心套件**：`.venv/bin/python3 -c "import yfinance, pandas, numpy, shioaji, fastapi, uvicorn"`
+2. **Dashboard 運行與 API 回應**：`curl -s http://localhost:5055/api/overview | python3 -m json.tool`；驗證 `/api/positions`、`/api/kpi`、`/api/intelligence`、`/refresh`
+3. **State 檔案完整與一致**：`strategy_link.json`、`positions.json`、`orders_open.json`、`portfolio_snapshot.json`、`agent_summary.json`、`auto_trade_state.json`、`auto_trade_config.json` 全部有效 JSON；positions vs snapshot reconciliation 吻合
+4. **ETF 功能指令**：`etf_tw compare 0050 00878`、`search candidates`、`list universe` 正常回傳
+5. **Market Context & Decision Engine**：market_context、decision log 可讀；decision log 無重複決策
+6. **Backfill Outcomes**：`backfill_outcomes.py --dry-run` 通過；去重閘門正常
+7. **交易時段閘門**：非交易時段（週六）送單被正確攔截；validate-order / preview-order 需要 JSON 檔案輸入
+8. **Cron 任務**：5 個排程任務存在且排程正確（健康巡檢 08:00、盤前準備 平日08:45、盤中掃描 平日09:00-13:30/30min、盤後收工 平日15:00、週深度復盤 週六09:00）
+9. **`etf_tw check` 全通**：修正後的變數名稱（`ETF_CURATED_PATH`）無殘留舊名引用
+
+---
+
+## 已知限制與待辦
+
+> 本區段對齊 `ETF_TW_GAP_AUDIT.md`（2026-05-06）稽核結論。缺口以 P1/P2 標示。
+
+### P1 缺口（阻塞家庭完整管理）
+
+- **P1-A ETF 殖利率資料**：scoring 架構已就位（`yield_pct`），實際資料尚未接線。高股息 / 收益型 ETF 評分偏弱。需選定資料源（TWSE / 投信官網 / 手動 curated）。
+- **P1-B 外部新聞長期資料源**：本地去雜訊完成；長期授權來源未定。AI Bridge 新聞風險 gate 受限。需 `docs/NEWS_SOURCE_POLICY.md` 與 `state/news_source_health.json`。
+- **P1-C Cathay / Yuanta live adapter**：Cathay readiness gate（已移除假功能）；Yuanta 尚未形成正式 adapter contract。需官方 API 規格 + 測試帳號。
+- **P1-D 實單盤中驗證**：本地 contract 完整（submit/callback/polling/fills ledger）；真實交易日驗證不足。需 `docs/LIVE_INTRADAY_VALIDATION_CHECKLIST.md` + 小額實單授權。
+
+### P2 缺口（可提升但不阻塞核心）
+
+- **P2-A Broker quote 主資料源**：Yahoo Finance 仍作為行情來源之一；盤中 scan 與下單前未全面改用 Shioaji live quote。需 `scripts/sync_broker_quotes.py` + market cache `truth_level` 欄位。
+- **P2-B 家庭資產聚合報表**：個人報表完整；4 profile 家庭層級彙總不足。需 `scripts/generate_family_portfolio_report.py` + `state/family_summary.json` + dashboard family overview。
+
+### 已完成（曾在此列的待辦）
+
+- **Paper Trading Ledger Initialization**：✅ 已完成 — `scripts/init_paper_ledger.py`
+- **P4 Edge Cases**：✅ 已完成 — partial fill / callback precedence / stale callback / timestamp ordering 全數實作
+- **回測持續性機制**：✅ 已完成 — `run_auto_decision_scan.py` 已內建 `_session_dedup_key()` + `_is_duplicate_session()` 閘門
+- **Decision log 去重清理**：✅ 歷史重複已清除；dedup key 修正（使用 `top_candidates[0]['symbol']`）
+- **Hold 不去重**：✅ `_session_dedup_key()` 對 hold 回傳 None，不做去重
+- **Broker reconciliation rules**：✅ `docs/BROKER_RECONCILIATION_RULES.md`
+
+### 規劃中功能（P3 低優先）
+
+- CLI 便利性增強（completion / UX）
+- 長期策略回測深化（需 3 個月實單後）
+- 國外 ETF 交易流程與風險說明
+- 全自動 live trading（原則上不開）
+
+---
+
+## 回測系統（Backtest Infrastructure）
+
+### 三合一回補腳本：`backfill_outcomes.py`
+
+位置：`scripts/backfill_outcomes.py`
+
+功能：
+1. **決策去重**：同日 + 同標的 + 同動作 = 一筆唯一決策（取最後一筆，最完整）
+2. **報酬率回補**：yfinance 抓決策日 → N 日後收盤價，計算 3d/5d/10d 報酬率
+3. **市場情境快照**：每筆決策附帶當時 market_context
+
+產出（不修改原始檔案，純增量）：
+- `state/decision_outcomes_dedup.jsonl`（去重 + 回補報酬）
+- `state/decision_context_history.jsonl`（情境快照）
+
+### 回測踩坑記錄
+
+1. **yfinance Ticker 對照表**：台股 ETF 用 `.TW` 後綴，但 TPBS（櫃買）掛牌的用 `.TWO`
+   - 0050 → 0050.TW，00679B → 00679B.TWO（不是 .TW！）
+   - 已改為自動推導：`resolve_yfinance_ticker()` 優先從 market_cache 取，其次用前綴規則（006→.TWO，其餘→.TW）
+
+2. **decision_log 去重很關鍵**：掃描腳本每 30 分鐘跑一次，同日同一標的會產生 12 筆重複記錄
+   - 34 筆 → 去重後僅 4 筆唯一決策
+   - 去重鍵：`日期 + 標的 + 動作`
+
+3. **reference_price 不在 decision_outcomes 裡**：原始 decision_outcomes.jsonl 的 reference_price 全是 null
+   - 真正的價格在 decision_log.jsonl 的 `top_candidates[0].price`
+   - 回補時要從 decision_log 取 reference_price
+
+4. **hold 動作沒有 top_candidates**：action=hold 的決策 top_candidates 是空列表
+   - 去重時 symbol 標為 NONE，回補時跳過報酬率計算
+
+5. **market_context 只留最新一份**：`market_context_taiwan.json` 不保留歷史
+   - 但 decision_log 每筆都有當時的 market_context 嵌入
+   - 回補時從 decision_log 提取，不依賴 market_context_taiwan.json
+
+6. **etf_core 模組路徑問題**：✅ 已解決
+   - `backfill_outcomes.py` 透過 `sys.path` 正確引入 `etf_core.state_io`
+   - 不再依賴本地重複定義的 `load_jsonl` / `safe_append_jsonl`
+   - `resolve_yfinance_ticker()` 改從 `market_cache` 動態推導 ticker，不需硬編碼對照表
+
+---
+
+## 資料來源與誠實原則 (Truth & Honesty Principles)
+
+- **真相分級優先序**：Level 1 (API 即時) > Level 2 (送單待驗證) > Level 3 (本機快照/記憶)
+- **實務操作指引**：
+  - 進行交易決策前，必須將 Level 3 快照同步至 Level 1。
+  - 送單後的回應屬於 Level 2，必須標註 `[驗證中]`，直到 Level 1 查詢確認成交。
+- **快照存儲點**：
+  - 持倉快照：`positions.json` (Level 3)
+  - 未終局委託快照：`orders_open.json` (Level 3)
+- **展示快照**：`portfolio_snapshot.json`、`agent_summary.json` (Level 3)
+- **報價來源**：Yahoo Finance（可能有延遲）；永豐 live path 可提供 broker 側查詢與 callback (Level 1)
+- **不宣稱即時**：若資料未經當次 Level 1 取得，明確標註為「本機快照」。
+- **不保證準確**：所有分析僅供參考，不構成投資建議。
+
+
+---
+
+## 與 Hermes Agent 的整合
+
+此技能可被 agent 調用，用於：
+- 回應使用者 ETF 相關問題
+- 執行 validate / preview / paper trade
+- 生成盤前/盤後/週/月報告
+- 風險巡檢與待確認事項整理
+
+**注意**：heartbeat 僅用於巡檢與提醒，不自動執行 live trade。
+
+### Dashboard 策略調整說明
+
+- 使用者可在 dashboard 中調整主策略（base strategy）與情境覆蓋（scenario overlay）
+- 這些設定會透過 `strategy_state.json`、`state/strategy_link.json`、`state/agent_summary.json` 傳遞給 agent
+- agent 應依此調整對話回覆風格、ETF 比較重點、候選方案排序與風險提醒側重
+- 但上述調整不應覆蓋硬風控，也不應跳過 validate / preview / confirm 的執行流程
+
+### ETF Universe Screening（2026-05-08）
+
+ETF_TW 的 ETF 推薦層分成四個不同資料範圍，嚴禁混用：
+
+| 層級 | 檔案 | 用途 | 是否使用者手動維護 |
+|---|---|---|---|
+| ETF Universe | `data/etf_universe_tw.json` | 台股 ETF 可交易總名錄（TWSE + TPEx，目前 338 檔） | 否 |
+| Watchlist | `instances/<agent>/state/watchlist.json` | 使用者高觸碰關注清單與 dashboard 顯示 | 是 |
+| Universe Screening | `instances/<agent>/state/universe_screening.json` | 由 338 檔 universe 依策略產生的短名單，供 Rule Engine / AI Bridge 參考 | 否 |
+| Market Intelligence | `instances/<agent>/state/market_intelligence.json` | 有報價/技術指標的活躍標的資料 | 否 |
+
+規則：
+- `watchlist.json` 不應被自動塞入 338 檔，保持使用者手動控制。
+- `universe_screening.json` 是生成產物，可包含非 watchlist 標的，但只供推薦/preview 候選參考。
+- `generate_ai_decision_request.py` 必須同時保留 `watchlist_context` 與 `universe_screening_context`，AI Bridge 不得只靠 wiki entity 或 18 檔 watchlist 做推薦。
+- `run_auto_decision_scan.py` 可合併 `watchlist + universe_screening.shortlist` 評分，但重複標的必須保留 watchlist 的人工 metadata。
+- screening 候選不會自動加入 watchlist，也不會自動下單；正式交易仍需 validate / preview / confirm / pre_flight_gate。
+- 一般策略 screening 需懲罰槓桿/反向/正2/反1 等複雜 ETF，避免被當成預設防守或平衡配置候選。
+- 回歸測試 `test_decision_universe_coverage.py` 必須維持：universe >= 300、screened > 100、平衡配置短名單至少 3 類、雙鏈推薦不塌縮為單一標的循環。
+
+---
+
+## 版本發布規範（強制）
+
+- bump 版本號前，必須先 `git fetch --tags origin`，再以 `git tag --sort=-v:refname | head`、root `README.md` 版本紀錄、`CHANGELOG.md` 最上方版本共同確認目前最新版本。
+- 不可只看 `SKILL.md` frontmatter 的 `version:`，該值可能落後於 GitHub tag / CHANGELOG / README。
+- 使用者要求「版本號 +0.0.1」時，意思是從目前最新正式版本做 patch bump：例如最新 `v1.4.16` → `v1.4.17`，不是建立 `v0.0.1` tag，也不是從 stale frontmatter `v1.4.5` bump 到 `v1.4.6`。
+- 發布流程必須一次更新所有版本來源：root `README.md` 標題與「📦 版本紀錄」（唯一主 README）→ `skills/ETF_TW/SKILL.md` frontmatter → `skills/ETF_TW/CHANGELOG.md` 最上方條目 → 測試 → commit → push main → 建立正確版本 tag → push tag。
+- 使用者說「收工」時，視為要求完成完整發版收尾：依修改量自行決定 patch/minor 版本（小量 +0.0.1、量多 +0.1.0），更新 README / CHANGELOG / SKILL 版本來源，執行必要測試與 graphify rebuild，commit、push main、建立並 push tag，再做遠端驗證。
+- 遠端驗證不能只看本機 git：必須用 `git ls-remote origin refs/heads/main refs/tags/<tag>` 確認 main/tag SHA，並用 `git show origin/main:README.md` 或 GitHub raw/API 確認遠端 README 已顯示新版紀錄。
+- 若誤建 tag，必須同輪刪除本地與遠端錯誤 tag：`git tag -d <bad>` + `git push origin :refs/tags/<bad>`，再建立正確 tag。
+- 若 tag 已推送後才補文件，需把 tag 移到最新 commit 並 force push tag；同時明確回報這是 tag 重定位，不是改寫 main history。
+
+## 版本歷史
+
+- **v1.11.0**（2026-05-08）：ETF Universe Screening 全面上線
+  - 新增 `scripts/generate_universe_screening.py`：從 338 檔 universe 依策略評分產生最多 30 檔 shortlist，寫入 `state/universe_screening.json`
+  - `generate_ai_decision_request.py` 補 `universe_screening_context`：AI Bridge 可參考非 watchlist 標的
+  - `generate_ai_decision_response.py`：candidate priority 三層（watchlist → screening → market intelligence fallback）
+  - `run_auto_decision_scan.py`：Rule Engine 合併 watchlist + screening shortlist 評分，不修改 watchlist.json
+  - `refresh_monitoring_state.py` / `refresh_decision_engine_state.py`：screening 納入 refresh pipeline
+  - dashboard overview 顯示 universe coverage 摘要（universe_total / shortlist_total / group distribution）
+  - 新增測試：`test_generate_universe_screening.py` / `test_decision_universe_coverage.py` / `test_decision_recommendation_reasonableness_matrix.py`
+  - ETF_TW 全測 `857 passed`
+
+- **v1.10.9**（2026-05-08）：Hermes-only 清理驗證 + sandbox live 測試跨日修正
+  - sandbox live guard / executor / cycle 測試 fixture 改用 Asia/Taipei 當日日期，避免跨日 runtime 自動關閉保護造成誤報
+  - 驗證 dashboard / cron / sandbox live 入口在 `AGENT_ID` contract 下可正常 import / dry-run / smoke test
+  - ETF_TW 全測 `847 passed`；focused tests：sandbox live `24 passed`；dashboard / cron / sandbox API `21 passed`
+
+- **v1.10.8**（2026-05-07）：sandbox_live 小額實單驗證框架 + gitnexus 索引設定
+  - `scripts/sandbox_live.py`：guarded state helper + 候選過濾 guard + 執行層（對應 GAP AUDIT P1-D）
+  - 計畫文件：`docs/plans/2026-05-07-sandbox-live-micro-order-validation.md`
+  - gitnexus 本地索引設定（AGENTS.md, CLAUDE.md, skill 文件）
+  - 新增測試 3 筆（838 passed）
+  - dashboard `--host` 預設改為 `0.0.0.0`（任何啟動方式均綁定所有介面）
+
+- **v1.10.7**（2026-05-07）：Dashboard health 假沉默修復 + scan LOCKED 早退補點
+  - `run_auto_decision_scan.py`：DISABLED / LOCKED 早退也更新 `last_scan_at` / `last_action` / `last_decision_summary`
+  - `dashboard/app.py`：`/health` 合併 reconciliation warnings + decision engine warnings + stale_items，消除 `ok:false` 但 `warnings:[]` 的假沉默
+  - Cron 健康巡檢移除對 `etf-tw-health-check` skill 的外部依賴，改為自包含巡檢 prompt
+  - 新增測試 7 筆（796 passed）
+
+- **v1.10.6**（2026-05-06）：GAP AUDIT 文件收斂
+  - 更新「已知限制與待辦」區段對齊 `ETF_TW_GAP_AUDIT.md` P1/P2 缺口分類
+  - `TASKS.md` 新增 GAP AUDIT 缺口追蹤區段（P1-A/B/C/D, P2-A/B）
+  - `references/roadmap.md` 重寫為 v1.10.3 實際狀態（已完成版本 + 已知缺口 + Phase 2-5 執行計畫）
+
+- **v1.10.5**（2026-05-05）：Cron 定義與本機 runtime state 分離
+  - `cron/jobs.json` 保持為可隨 GitHub 發佈的 9 個任務定義，不再保存 `next_run_at` / `last_status` 等執行狀態
+  - `cron/runtime_state.json` 保存本機排程狀態並加入 `.gitignore`，避免 cron tick 每天污染工作樹
+  - ETF_TW 全測 789 passed；Hermes cron 回歸測試 70 passed；graphify 4624 nodes / 8624 edges / 525 communities
+
+- **v1.10.4**（2026-05-05）：TODO 收斂與 reconciliation / indicator 補齊
+  - `filled_reconciliation.py` 新增成交後 positions 對齊完成條件：positions snapshot 必須晚於 fill fact；買進需看到正持倉，賣出可對齊至持倉消失
+  - 新增 positions / portfolio snapshot alignment summary，refresh report 會寫入 snapshot drift，dashboard health 可承接 warning
+  - `sync_ohlcv_history.py` 補 KD、20 日均量與量比；AI Bridge request 可攜帶 Bollinger / KD / volume metrics
+  - `TASKS.md` 對齊 v1.10.x 現況，已完成項標 DONE，Cathay / 盤中正式驗證 / 外部新聞源標外部阻塞
+
+- **v1.10.3**（2026-05-05）：修正健康巡檢三項異常
+  - `etf_tw.py`：新增 `_etf_category()` fallback helper，修正 list/search/compare/category 在缺 `category` 欄位時 KeyError crash
+  - `run_auto_decision_scan.py`：修正 `_is_duplicate_session` 與 `_session_dedup_key` symbol 來源不一致（top-level vs top_candidates[0]），解決同日同標的被重複 log 4 次的 bug
+  - 新增 `test_dedup_session_key.py`（9 tests）；全套 780 passed
+
+- **v1.10.2**（2026-05-05）：修正雙鏈勝率統計 — source fallback
+  - `update_chain_breakdown()` 對 `chain_sources=None` 的老紀錄新增 fallback：依 `source` 欄位分桶（`run_auto_decision_scan` → rule_engine；`generate_ai_decision_response` → ai_bridge）
+  - 修正前：13 筆結算紀錄全落入 unknown_source，雙鏈勝率顯示 N/A
+  - 修正後：rule_engine 13 筆 92% 勝率（12W/0L/1F）、tier2_rule_overruled_ai 2 筆 100%
+  - 新增測試 `test_update_chain_breakdown_source_fallback`；全套 770 passed
+
+- **v1.10.1**（2026-05-01）：ETF universe metadata + 雙鏈決策候選語意修正
+  - 台股 ETF universe 同步至 338 檔，補齊 TWSE / TPEx 多幣別拆分與 issuer / asset_class / region / strategy_tags / risk_flags / yfinance ticker 衍生欄位
+  - AI Bridge request 新增 `watchlist_context`，watchlist 候選不再依賴 16 個 wiki entity 才能取得完整上下文
+  - `generate_decision_consensus.py` 改用 universe + curated 合併 catalog，修正 `00939` / `00720B` 被判成查無資料
+  - 規則引擎與 AI Bridge 分離 `buy-preview`、`watch_only`、advisory candidate；觀察模式不建立 preview，高波動警戒/逢低觀察 overlay 正確生效
+  - 全測 776 passed；graphify 4538 nodes / 8493 edges / 495 communities
+
+- **v1.10.0**（2026-05-01）：智能 multiplier 鏈完整化（E2 + F1 + F-news）
+  - 新增 **持倉相關性懲罰**：`correlation_engine` + `compute_correlation_matrix.py`，買進時 ρ>0.7 線性折扣倉位（floor 0.2）
+  - 新增 **動能反轉賣訊**：個股 20d vs 大盤中位數跑輸 ≥10% 且 RSI<40 → 在 trailing 之外觸發出場
+  - 新增 **新聞風險 Gate**：消費 `news_intelligence_report.json`，high/medium 對買單做 haircut（×0.4 / ×0.7）
+  - buy_scanner final_multiplier 鏈：strategy × overlay × risk × defensive × **macro × correlation × news**
+  - sell_scanner 雙路徑：動能反轉 vs trailing stop（互斥）
+  - Dashboard 策略骨架卡新增「📰 新聞風險 Gate」「🔗 持倉相關性懲罰」段
+  - 計畫書 `2026-04-28-A-to-G-plan.md` 加執行進度段，明確 D / E1 / G 暫緩到實單 3 個月後
+  - 全測 763 passed（2026-05-01 Codex 對齊檢視實跑）
+
+- **v1.9.0**（2026-04-30）：長線風控與外部能力安全前置層
+  - 新增 paper ledger 初始化、資料品質報告、組合風控報告、broker readiness 與新聞情報去雜訊報告
+  - CLI `status` 顯示模式、帳務、對帳、資料品質、組合風控與新聞情報
+  - Phase 2 加入 DCA trailing grace、cooldown reentry 標記與 mixed lot 出場計畫分組
+  - Cathay adapter 移除 scaffold 假認證 / 假成交，官方 API 規格與測試帳號完成前不標記 live-ready
+  - 新聞 stale source 超過 24 小時不進 AI Bridge 候選；全測 721 passed，graphify 4338 nodes / 7596 edges
+
+- **v1.8.2**（2026-04-30）：cron 缺失腳本修復 + ETF_TW 內建量化診斷
+  - 新增 `scripts/run_intraday_quant_diagnosis.py`，輸出 `intraday_quant_diagnosis.json`
+  - 盤中智慧掃描 cron 不再呼叫缺失的 `stock-analysis-tw/scripts/analyze_stock.py`
+  - 盤後與每週深度復盤移除 `stock-analysis-tw` / `stock-market-pro-tw` 必跑依賴
+  - 早班 / 盤後 `generate_watchlist_summary.py` 補上 `--mode am/pm`
+  - 更新 cron references / SOP；全測 668 passed，graphify 3776 nodes / 6502 edges
+
+- **v1.8.1**（2026-04-29）：live submit 盤後零股修正 + submission journal + orders_open 清理
+  - `live_submit_sop.py` 優先使用 instance account credentials，env vars 僅作 fallback
+  - 盤後零股時段改用 `StockOrderLot.Odd`，盤中零股維持 `IntradayOdd`
+  - `sync_orders_open_state.py` 讀取券商成交紀錄清除已成交 open order
+  - 新增 `submission_journal.jsonl` audit trail 與 `submit_response` metadata contract
+  - 沉澱 006208 盤後零股未受理事件到 Shioaji wiki，並同步 references / graphify；全測 666 passed
+
+- **v1.8.0**（2026-04-29）：v2 自動交易骨架 + live submit 安全收斂 + production replay 審計
+  - A/B/C 計畫加入 top-down macro regime、壓力情境回測與 production replay 對照
+  - DCA 初始建倉、寬 trailing、比例 ladder、macro buy gate 與 Phase 2 DCA dashboard 控制接線完成
+  - 正式送單統一走 `live_submit_sop.py`；未驗證 live 回報進 ghost log，不落入 `orders_open.json`
+  - 修正 `UNVERIFIED` 被字串包含誤判為 `VERIFIED` 的 ghost order 風險
+  - `sell_scanner` 支援 mixed lot board/odd 拆單，避免 odd lot 超量被 pre-flight gate 擋下
+  - 新增交錯修改整合審計與 ETF 獲利手段 wiki；全測 660 passed，graphify 3894 nodes / 7146 edges
+
+- **v1.7.0**（2026-04-27）：正式下單安全閘門 + Dashboard 資訊架構整理
+  - 可交割金額成為 pre-flight sizing 硬基準；0 或負數不再 fallback 到帳面現金
+  - Phase 2 買入掃描新增同日 pending/acked/executed + 本筆累計額度檢查
+  - Sinopac adapter / legacy enhanced adapter 鎖定股張轉換規則並拒絕混合單位
+  - Dashboard watchlist 合併完整 ETF universe，支援 00720B 等完整清單標的
+  - 左側基本資訊合併狀態中心，持倉快照 full width，左側卡片全數支援收合
+
+- **v1.3.3**（2026-04-13）：F1斷層修復 + 決策鏈重檢 + 推薦引擎修正
+  - F1 修復：POST `/api/auto-trade/submit` 端點，4道Gate確認機制（confirmation/candidate/live_submit/large order）
+  - 決策鏈重檢：config/generate/rerun 三端點操作後自動觸發 `_run_consensus_rescan()`
+  - 推薦引擎：未持有加分 +2→+1、同群競爭均化 1/√(group_size)
+  - watchlist 擴充：10→18 檔（defensive:4, growth:3, income:6, core:4, smart_beta:1）
+
+- **v1.3.4**（2026-04-14）：TOMO 三原則量化 + AI reasoning 重寫
+  - decide_action() 重寫：散裝if → _score_yield/_score_momentum/_score_track_record 三維量化
+  - sync_ohlcv_history.py 新增：calc_momentum(), calc_sharpe(), 寫入 momentum_20d/sharpe_30d/return_1y
+  - AI agent reasoning 重寫：多維評分取代「最低RSI」、填入實質市場判斷
+  - 結果：00679B 不再壟斷候選，00892/006208/00923 依三原則分數正常競爭
+
+- **v1.4.1**（2026-04-19）：部署驗證與安全修正（實測 etf_master_wife clone 發現）
+  - `verify_deployment.sh`：移除 `set -e`（curl 失敗不再中斷整個腳本）；`/api/positions` → `/api/overview.positions`（端點不存在）；交易時段閘門改用 `validate-order` 子指令（`order` 不存在）；新增 `DASHBOARD_PORT` env var 支援多實例測試
+  - `DEPLOYMENT.md`：步驟七八對調（sync pipeline 先於 Dashboard 啟動）；新增 Paper Mode 最小腳本表格（5 支必要 vs 11 支完整）；補充 worldmonitor cron `enabled:false` 自動跳過說明
+  - `cron/jobs.json`：個人 Telegram chat_id/chat_name 移出 git 追蹤，改為 `${TELEGRAM_HOME_CHANNEL}`/`${TELEGRAM_CHAT_NAME}` 佔位符；真實值移入 `.env`
+  - `private/.env.example`：補齊 AGENT_ID、Telegram Bot（4 個變數）、Shioaji（5 個變數）、worldmonitor（2 個變數）的繁中說明
+  - 實測驗證：從 etf_master clone 建立 etf_master_wife 獨立 instance，**9/9 健康巡檢全通，353 tests passed**
+
+- **v1.4.0**（2026-04-19）：Worldmonitor 全球風險雷達整合
+  - 新增 `sync_worldmonitor.py`：雙模式（daily 快照 / watch 事件監控），從 worldmonitor API 拉取全球風險信號
+  - API 欄位修正：`chokepoints[].disruptionScore/status/warRiskTier`（無 global_stress_level，需推算）；`stressScore`/`stressLevel`（非 shipping_stress_index）；`minerals[].mineral/riskRating`
+  - Bot UA 繞過：加入 `User-Agent: Mozilla/5.0 ETF-Master/1.0` 繞過 worldmonitor `middleware.ts` 過濾
+  - 新增 `_derive_global_stress_level()`、`_derive_taiwan_strait_risk()`、`_derive_taiwan_semiconductor_risk()` 從 API 回傳推算風險等級
+  - `_detect_alerts()`：前後快照比對，產生 L2/L3 geopolitical/supply_chain/taiwan_strait 升級事件
+  - `_compute_affected_etfs()`：根據 ETF focus/index/name 動態比對受影響 ETF
+  - AI Decision Bridge 接線：`generate_ai_decision_request.py` 新增 `worldmonitor_snapshot`、`worldmonitor_alerts` 作為第 14 個輸入源；`ai_decision_bridge.py` 新增 `_build_worldmonitor_context()`
+  - Dashboard 全球風險雷達卡：`/api/worldmonitor-status`（含 chokepoints 清單、shipping_stress_score）；`POST /api/worldmonitor/refresh` 一鍵更新；收合 ▾/▸ 按鈕；↻ 更新按鈕；tooltip 說明
+  - Cron 啟用：`worldmonitor_daily`（每日）、`worldmonitor_watch`（盤中每 30 分鐘）
+  - 新增 state 檔案：`worldmonitor_snapshot.json`（atomic overwrite）、`worldmonitor_alerts.jsonl`（append-only L2/L3 事件）
+  - 新增 9 項 worldmonitor 測試（全通）；全套 12 項測試通過
+
+- **v1.3.5**（2026-04-14）：Phase B 宏觀指標 + Phase C LLM 增強推理
+  - B1: sync_news_from_local.py — 本機新聞 RSS 採集（沙盒無外網 fallback）、關鍵字標籤、情緒分類
+  - B2: sync_macro_indicators.py — TAIEX 趨勢/VIX proxy/市場寬度（shioaji+ETF proxy fallback）
+  - B3: sync_central_bank_calendar.py — FOMC+央行會議日曆（硬編碼2026+年度更新）
+  - B4: generate_market_event_context 接線 news/calendar/macro（新聞→事件偵測、日曆→利率風險、VIX→市場風險）
+  - C1: generate_llm_event_context.py — LLM 增強版事件情境（LLM 可用→覆蓋規則引擎，否則 fallback）
+  - C2: generate_llm_decision_reasoning.py — LLM 增強版決策推理（政經判斷三段式）
+  - C3: _build_agent_reasoning() 接進 decision_reasoning.json（pre_reasoning 優先，inline fallback）
+  - reasoning_source 欄位標記來源（llm-enhanced-v1 / rule-engine-v1 / inline）
+  - 坑：沙盒 HTTPS 全不通（非 DNS 問題），新聞採集改本機端執行
+  - 坑：generate_llm_event_context 在沙盒 timeout（requests 嘗試連 LLM API 但外網不通），需加 timeout 或 skip
+
+- **v1.3.2**（2026-04-13）：Live 交易 Shioaji API 實戰修正
+  - 修正合約查找：00679B 使用 `api.Contracts.Stocks.OTC.get()`（櫃買），不是 TSE
+  - 新增 Shioaji API 常數與用法指南：`api.stock_account`（屬性）、`StockOrderLot.IntradayOdd`（盤中零股）、`OrderType.ROD`、`StockPriceType.LMT`
+  - 新增憑證讀取鐵律：`private/.env` 用 Python open 讀取（read_file 會遮蔽***）
+  - 新增 broker order ID 解析：在 `trade.order.ordno` 和 `trade.status.id`
+  - 記錄 `api.logout()` segfault 為已知 bug
+  - 新增 `references/live-trading-sop.md`：Live 交易標準作業程序（Pre-flight、下單流程、委託驗證、錯誤處理）
+  - 新增 `docs/shioaji_api_reference.md`：完整 21 節 Shioaji API 參考（登入→快速入門，含 ETF 用法與已知問題）
+  - 修正 dashboard `default_broker: N/A`：state 需寫入 `instances/etf_master/state/` 而非 `ETF_TW/state/`
+
+- **v1.3.1**（2026-04-12）：Bug 修正與健康巡檢 SOP
+  - 修正 `etf_tw.py` 中 `ETF_PATH` → `ETF_CURATED_PATH` 變數名稱錯誤，導致 `check`/`list`/`search` 三指令 NameError 崩潰
+  - 新增「健康巡檢 SOP」9 項驗證清單（venv、dashboard、state、功能指令、decision engine、backfill、交易時段閘門、cron、check）
+  - 新增「變數名稱錯誤」血淚教訓：重構搬移時必須 grep 全專案確認無殘留舊名
+  - gateway_timeout 從 1800s 提升至 3600s（防止長時間 agent 迭代被中斷）
+
+- **v1.3.0**（2026-04-12）：回測基礎建設 — 去重閘門 + 報酬回補 + 情境快照
+  - `run_auto_decision_scan.py` 新增 `_session_dedup_key()` + `_is_duplicate_session()` 去重閘門
+  - Hold 決策不去重（每次市場情境不同）
+  - `backfill_outcomes.py` 三合一腳本：決策去重 + yfinance 報酬率回補 + 市場情境快照
+  - `resolve_yfinance_ticker()` 動態推導 yfinance ticker（不再硬編碼對照表）
+  - 清理歷史重複資料：decision_log 34→4 筆、decision_outcomes 34→4 筆
+  - 新增 `decision_outcomes_dedup.jsonl` 和 `decision_context_history.jsonl`
+  - 原始檔案備份為 `.bak.2026-04-12`
+
+- **v1.2.3**（2026-04-11）：Decision Provenance Logger 建置
+  - 新增 `provenance_logger.py`：append-only JSONL 決策溯源記錄器
+  - 改造 5 個腳本寫入 provenance：`generate_ai_decision_response.py`、`run_auto_decision_scan.py`、`ai_review_lifecycle.py`、`update_decision_outcomes.py`、`ai_reflection_lifecycle.py`
+  - Schema v1：decision_id / inputs_digest / outputs / review_lifecycle(T1/T3/T10) / outcome_final / tags
+  - 完整生命週期追蹤：決策產出 → review → outcome → reflection
+
+- **v1.2.2**（2026-04-10）：Hermes 移轉對齊與 cron 重建
+  - 技能目錄確定為 `~/.hermes/profiles/etf_master/skills/ETF_TW/`
+  - State 路徑為 `ETF_TW/instances/etf_master/state/`
+  - Dashboard 啟動：殺舊進程 → `cd ~/.hermes/profiles/etf_master/skills/ETF_TW && .venv/bin/python3 -m uvicorn dashboard.app:app --host 0.0.0.0 --port 5055`
+  - Cron 任務需從舊環境重建至 Hermes（路徑指向新目錄）
+  - 盤點完成：21 筆舊版 cron 含 3 筆 timeout 殭屍需清除
+  - 幽靈掛單：broker_order_id:null + verified:false = 假回單，立即清除通知主人
+
+- **v1.2.1**（2026-04-10）：新增「血淚教訓」章節，來自舊系統遷移期真實踩雷事件
+  - 幽靈掛單偵測：broker_order_id為空時禁止輸出成交暗示
+  - venv 強制路徑：正式送單必走 .venv/bin/python3
+  - 預演/正式分層：preview_only_mode 不得吃掉正式下單
+  - 委託驗證鐵律：API回應 ≠ 委託落地
+  - Cron 回報語言：強制繁體中文
+  - Dashboard 啟動路徑更新至 ~/.hermes/profiles/etf_master/skills/
+
+- **v1.2.0**（2026-03-28）：新增本地可視化儀表與 state-driven 架構
+  - 修正 README.md
+  - 新增公開版 Sinopac onboarding / troubleshooting 文件
+  - 新增私有版 deployment 文件（不納入公開包）
+  - 補充 CA 憑證下載入口與密碼規則說明
+  - 新增 state-driven dashboard（持倉 / watchlist / KPI / risk signals）
+  - 新增 state 同步腳本與本地儀表首頁
+  - 保守增量改造：不直接碰 live 主線
+
+- **v1.0.1**（2026-03-26）：公開整理與發布版本
+  - 補齊 README.md
+  - 對齊 ETF 優先 / 台灣 ETF 優先 / 保留國外 ETF 能力 的技能定位
+  - 補充永豐金證券（Shioaji）正式接入現況說明
+  - 更新 TASKS.md 與可分發打包規則
+
+- **v1.0**（2026-03-23）：初始版本，提取自 agent 工作區
+  - 支援 ETF 查詢、比較、DCA 試算
+  - 支援模擬交易（paper trade）
+  - 基本風控規則（單位混淆檢查、單筆上限）
+  - 技術指標計算（MA/RSI/MACD）
+  - 持倉追蹤與損益計算
+
+---
+
+## 聯絡與回饋
+
+如有功能建議或發現問題，請透過 Hermes Agent 反饋，或更新 `TASKS.md` 與 `roadmap.md`。
+
+## 知識庫 references/ 索引（2026-04-29 傘狀整理）
+
+主技能 ETF_TW 已吸收下列窄域技能為 references/ 知識庫文件。需要特定工作流細節時可直接查 `references/`：
+
+| 原技能名稱 | references/ 檔案 | 內容 |
+|-----------|-----------------|------|
+| etf-decision-engine-v2 | decision-engine-v2-architecture.md | 決策引擎 v2 架構（三原則量化+LLM增強） |
+| etf-market-context-pipeline | market-context-pipeline-roadmap.md | 市場情境管線三階段 roadmap |
+| etf-tw-cron-path-fixes | cron-path-fixes-and-script-substitutions.md | Cron 腳本替代與路徑修正 |
+| etf-tw-graphify-lesson | graphify-cooccurrence-bias-lesson.md | Graphify ETF 共現偏差教訓 |
+| etf-tw-health-check | system-health-check.md | 系統健康巡檢 9 項 SOP |
+| etf-tw-health-check-notes | system-health-check-notes.md | 健康巡檢補充備忘 |
+| 基金全覆蓋知識沉澱流程 | fund-coverage-wiki-playbook.md | 非ETF基金全覆蓋蒐集、三層 wiki 雙寫與索引更新流程 |
+
+| etf-tw-intraday-smart-scan | intraday-smart-scan-cron-workflow.md | 盤中智慧掃描 cron 流程 |
+| etf-tw-intraday-wiki-risk-flagging | intraday-wiki-risk-flagging.md | 盤中掃描 wiki 風險標記 |
+| etf-tw-market-prediction-workflow | market-prediction-workflow.md | 隔日行情預測標準化流程 |
+| etf-tw-morning-briefing | morning-briefing-cron-workflow.md | 早班準備 cron 流程 |
+| etf-tw-order-submit-monitor | order-submit-monitor-workflow.md | 下單監控完整流程 |
+| etf-tw-p2-reconciliation-dashboard-hardening | p2-reconciliation-dashboard-hardening.md | P2 資料流審計與 dashboard 強化 |
+| etf-tw-portfolio-rebalancing-advice | portfolio-rebalancing-advice-workflow.md | 資產重配置建議流程 |
+| etf-tw-post-market-review | post-market-review-cron-workflow.md | 盤後收工 cron 流程 |
+| etf-tw-state-monitoring-audit | state-monitoring-audit-workflow.md | State/Dashboard/監控審計 |
+| etf-tw-undervaluation-scan | undervaluation-scan-model.md | ETF 低估排行 6 因子評分 |
+| etf-tw-weekly-deep-review | weekly-deep-review-cron-workflow.md | 每週深度復盤 cron 流程 |
+| etf-tw-wiki-knowledge-pipeline | wiki-knowledge-pipeline-architecture.md | Wiki→AI Decision Bridge 鏈路 |
+| etf-tw-worldmonitor-daily-patrol | worldmonitor-daily-patrol-cron-workflow.md | WorldMonitor 每日巡檢 |
+| etf-tw-worldmonitor-rollout-audit | worldmonitor-rollout-audit-checklist.md | WorldMonitor 落地驗收缺口盤點 |
+
+**保留的獨立子技能**（具備獨立操作價值，不適合完全吸收）：
+- `etf-tw-trading-rules`：交易規則知識庫（委託類型、時段、零股、交割規則）
+- `etf-tw-live-query`：即時持倉與掛單查詢（live broker API 繞過 state）
+- `etf-tw-p0-remediation`：P0 交易致命錯誤收斂流程（含五步驟+最小驗證）

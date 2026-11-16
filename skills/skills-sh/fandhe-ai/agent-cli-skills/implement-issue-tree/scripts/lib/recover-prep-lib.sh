@@ -1,0 +1,296 @@
+#!/usr/bin/env bash
+# recover-prep-lib.sh — recover-prep.sh の判断だけを持つ純関数（source 専用）
+#
+# 呼び出し元: recover-prep.sh（Issue #603 第 9 弾）。対象ブランチの解決、WIP コミットの要否と結果の分類、base との差分の三値判定を、
+#             git を呼ぶ本体から切り出したもの。切り出した理由は、テストが 1 回の bash 起動でこれらの関数へ表の全ケースを渡せるように
+#             するため（lib/pr-push-lib.sh・lib/worktree-remove-lib.sh と同じ）。
+# 契約: どの関数も exit せず、git・gh・ネットワークを呼ばない。結果は RP_* 変数・標準出力・return 値で返す。source 元のシェル状態を壊さないため
+#       set -e / set -u / trap / exit は置かない。二重 source は無害。
+#       入力の形式検証（wr_valid_branch など）と status の行数（wr_count_status）は lib/worktree-remove-lib.sh のものを使う（recover-prep.sh が両方を source する）。
+# 互換: macOS（BSD userland・bash 3.2）と Linux（GNU・busybox）。paste・bc・mapfile・連想配列・GNU 専用フラグを使わない。
+#
+# このファイルは単体実行しない。run-verified.sh のハッシュ照合は scripts/lib/*.sh も対象に含む。
+# 読み込み済みを示す変数でのガードは置かない（環境から継承した変数で定義が飛ばされ、偽の関数が使われるのを防ぐ）。
+
+# shellcheck disable=SC2034  # RP_* は source 元のスクリプトが読む
+RP_RESOLVED=0
+RP_REASON=""
+RP_BRANCH=""
+RP_SOURCE="none"
+RP_WT_MISSING=0
+RP_NESTED=0
+RP_UNMERGED=0
+
+# 対象ブランチの解決。引数:
+#   $1 given    旧 worktree のパスが与えられたか（0 / 1。0 は branch だけの残骸）
+#   $2 wtstate  旧 worktree の状態: missing（パスが存在しない = dead worktree）/ main（メイン worktree）/ unregistered（git worktree list に無い）/
+#               mismatch（パスはあるが、git がその worktree 自身を指さない = .git の破損や別の repo）/ live（登録済みで実体も一致）
+#   $3 head     live の worktree の HEAD が指すブランチ名。ブランチを指さない（detached）・読めないときは空
+#   $4 state    状態ファイルに記録されていたブランチ名（空 = 記録なし）
+#   $5 base     base ブランチ名
+# 結果: RP_RESOLVED（1 = 対象を確定できた、0 = 確定できず保全が必要）/ RP_REASON（RP_RESOLVED=0 の理由の語。1 のときは空）/
+#       RP_BRANCH（対象ブランチ。確定したが対象が無い〔dead worktree で記録も無い〕ときは空）/ RP_SOURCE（worktree / state / none）/
+#       RP_WT_MISSING（1 = dead worktree）。
+# 規則:
+#   - branch だけの残骸は記録されたブランチを使う（食い違う実体が無い）。
+#   - dead worktree は記録されたブランチを使う（無ければ対象なし = 継続不能）。取り残すデータが無い。
+#   - どちらも、解決したブランチが base と同名なら確定しない（live と対称。base を継続・破棄の対象にしない）。
+#   - live は worktree の HEAD を使う。state のブランチは参考値で、食い違えば HEAD を優先する（WIP が積まれるのは HEAD 側）。
+#     HEAD がブランチを指さない・形が不正・base と同名なら確定しない（base に WIP を積むと discard で消せず、continue は壊れる）。
+#   - main・unregistered・mismatch は確定しない（メインや無関係な repo に WIP を積まない。実体があるのに git が見ていない領域は
+#     データが残っている可能性があるため dead 扱いにしない）。
+rp_resolve() {
+  RP_RESOLVED=0
+  RP_REASON=""
+  RP_BRANCH=""
+  RP_SOURCE="none"
+  RP_WT_MISSING=0
+  if [ "$1" != 1 ]; then
+    if [ -z "$4" ]; then
+      RP_REASON=no-target
+    elif [ -n "$5" ] && [ "$4" = "$5" ]; then
+      RP_REASON=base-branch
+    else
+      RP_RESOLVED=1
+      RP_BRANCH=$4
+      RP_SOURCE=state
+    fi
+    return 0
+  fi
+  case "$2" in
+    missing)
+      if [ -n "$4" ] && [ -n "$5" ] && [ "$4" = "$5" ]; then
+        RP_REASON=base-branch
+      else
+        RP_RESOLVED=1
+        RP_WT_MISSING=1
+        if [ -n "$4" ]; then
+          RP_BRANCH=$4
+          RP_SOURCE=state
+        fi
+      fi
+      ;;
+    main) RP_REASON=main-worktree ;;
+    unregistered) RP_REASON=not-registered ;;
+    mismatch) RP_REASON=toplevel-mismatch ;;
+    live)
+      if [ -z "$3" ]; then
+        RP_REASON=detached
+      elif [ -n "$5" ] && [ "$3" = "$5" ]; then
+        RP_REASON=base-branch
+      else
+        RP_RESOLVED=1
+        RP_BRANCH=$3
+        RP_SOURCE=worktree
+      fi
+      ;;
+    *) RP_REASON=unknown-state ;;
+  esac
+  return 0
+}
+
+# ブランチを指さない（detached）live の worktree に残った子孫コミットの取り込み判定（Issue #731）。Review の fix が別 worktree の detached HEAD で
+# コミットし、ブランチの ref へ反映されないまま終わったとき、状態ファイルのブランチ先端が HEAD の祖先なら、ブランチを fast-forward して
+# worktree の HEAD を付け直せば継続・破棄の掃除（worktree-remove.sh --expect-branch）が通る。ここは判断だけを持ち、git は呼ばない。
+
+# `git worktree list --porcelain` の出力 $1 に、ブランチ $2 を checkout 中の worktree があるか（0 = ある / 1 = 無い）。
+# 行全体の完全一致で比べる（feature/a と feature/ab の前方一致を取り違えない）
+rp_branch_in_use() {
+  local line
+  while IFS= read -r line; do
+    [ "${line}" = "branch refs/heads/$2" ] && return 0
+  done <<<"$1"
+  return 1
+}
+
+# `git worktree list --porcelain` の出力 $1 から、ブランチ $2 を checkout 中の、メイン以外の登録を 1 件 1 行（パス TAB HEAD の sha TAB lock の有無 0/1 TAB lock の理由）で
+# 標準出力へ返す（Issue #755）。先頭のエントリはメイン worktree なので除外する。ブランチ名は行全体の完全一致で比べる。パスは空白を含んでよい（TAB を含むパスは出さない）。
+# lock の理由は最後の欄（空のことがある）
+rp_holder_entries() {
+  local line cur="" idx=0 sha="" br=0 lk=0 reason="" tab=$'\t'
+  _rp_holder_flush() {
+    if [ "${idx}" -gt 1 ] && [ "${br}" = 1 ]; then
+      case "${cur}" in
+        *"${tab}"*) ;;
+        *) printf '%s\t%s\t%s\t%s\n' "${cur}" "${sha}" "${lk}" "${reason}" ;;
+      esac
+    fi
+  }
+  while IFS= read -r line; do
+    case "${line}" in
+      'worktree '*)
+        _rp_holder_flush
+        cur=${line#worktree }
+        idx=$((idx + 1))
+        sha=""
+        br=0
+        lk=0
+        reason=""
+        ;;
+      'HEAD '*) sha=${line#HEAD } ;;
+      "branch refs/heads/$2") br=1 ;;
+      'locked' | 'locked '*)
+        lk=1
+        reason=${line#locked}
+        reason=${reason# }
+        ;;
+    esac
+  done <<<"$1"
+  _rp_holder_flush
+  unset -f _rp_holder_flush
+  return 0
+}
+
+# 使用中ブランチの握り手を解放してよいかの判定（Issue #755）。引数: $1 = 握り手が回復対象の worktree 自身か（0 / 1）、$2 = 握り手の HEAD がブランチ先端と一致するか（0 / 1）、
+# $3 = 汚れの行数（-1 = 確認できなかった）、$4 = マージ・cherry-pick・revert・rebase の途中か（0 / 1）、$5 = lock の理由、$6 = このランが所有する、または終了済みの握り手か
+# （0 / 1。lock の pid が死んでいる、またはこのスクリプトの祖先 = 同じセッション、のときだけ 1。確認できなければ 0）。標準出力は固定語:
+#   free（解放してよい）/ self / not-agent（lock が Claude Code の worktree の形でない = 利用者の worktree かもしれない）/ foreign（稼働中の別セッションかもしれない）/
+#   unobservable / dirty / in-progress / moved
+# 稼働中の別の Claude セッションの worktree は、clean な瞬間でも解放しない（解放後のコミットがその worktree の detached HEAD に積まれるため）。所有を確認できなければ保全する
+rp_holder_plan() {
+  if [ "$1" = 1 ]; then
+    echo self
+  elif ! wr_lock_pid "$5"; then
+    echo not-agent
+  elif [ "$6" != 1 ]; then
+    echo foreign
+  elif [ "$3" -lt 0 ]; then
+    echo unobservable
+  elif [ "$3" -gt 0 ]; then
+    echo dirty
+  elif [ "$4" != 0 ]; then
+    echo in-progress
+  elif [ "$2" != 1 ]; then
+    echo moved
+  else
+    echo free
+  fi
+}
+
+# 付け直し（adopt）の可否。引数: $1 = 状態ファイルのブランチ名（空 = 記録なし）、$2 = base、$3 = ローカルの refs/heads/<branch> が実在するか（0 / 1）、
+# $4 = そのブランチをどこかの worktree が checkout 中か（0 / 1）、$5 = HEAD に含まれないブランチ側のコミット数（`git rev-list --count HEAD..branch`。
+# 数値でなければ確認不能）、$6 = マージ・cherry-pick・revert・rebase の途中か（0 / 1）。標準出力は固定語:
+#   adopt（付け直してよい）/ no-state-branch / base-branch / no-ref / in-use / in-progress / diverged（ブランチ側に HEAD に無いコミットがある）/ unknown（数を確認できない）
+rp_detached_plan() {
+  if [ -z "$1" ]; then
+    echo no-state-branch
+  elif [ -n "$2" ] && [ "$1" = "$2" ]; then
+    echo base-branch
+  elif [ "$3" != 1 ]; then
+    echo no-ref
+  elif [ "$4" != 0 ]; then
+    echo in-use
+  elif [ "$6" != 0 ]; then
+    echo in-progress
+  else
+    case "$5" in
+      '' | *[!0-9]*) echo unknown ;;
+      0) echo adopt ;;
+      *) echo diverged ;;
+    esac
+  fi
+}
+
+# `git status --porcelain=v2 -z -uall --ignore-submodules=none` を 1 レコード 1 行にした出力（recover-prep.sh の observe が作る。パスは引用されない）から、未マージ行（`u `）の数を RP_UNMERGED に、独立した入れ子の
+# git リポジトリ（未追跡の行 `? <パス>/` のように末尾が / のもの。中身は親の WIP コミットに入らず、ポインタだけが記録される）の数を
+# RP_NESTED に入れる。入力は here-string で渡す。read -r なので末尾が \ のパスでも次の行と連結しない（-r を外すと連結して壊れる。here-string か here-document かは関係しない）
+rp_scan_status() {
+  local line u=0 n=0
+  while IFS= read -r line; do
+    case "${line}" in
+      'u '*) u=$((u + 1)) ;;
+      '? '*/) n=$((n + 1)) ;;
+    esac
+  done <<<"$1"
+  RP_UNMERGED=${u}
+  RP_NESTED=${n}
+}
+
+# WIP コミットの要否。$1 = 汚れの行数（-1 = 確認できなかった）、$2 = 未マージ行の数、$3 = 入れ子の git リポジトリの数、
+# $4 = マージ・cherry-pick・revert・rebase の途中か（0 / 1。省略は 0）。標準出力:
+#   none        汚れが無い（コミットは作らない）
+#   commit      コミットする
+#   unmerged    未マージのエントリがある（コンフリクトの途中。add -A がマーカー入りの内容を確定させてしまうので触らない）
+#   in-progress マージ・cherry-pick・revert・rebase の途中（add -A は未解決の途中状態を確定させる。触らない）
+#   nested-repo 入れ子の git リポジトリがある（add -A は中身ではなくポインタだけを記録し、worktree を消すと中身が失われる。触らない）
+#   unverified  汚れを確認できなかった
+rp_wip_plan() {
+  if [ "$1" -lt 0 ]; then
+    echo unverified
+  elif [ "$1" -eq 0 ]; then
+    echo none
+  elif [ "$2" -gt 0 ]; then
+    echo unmerged
+  elif [ "${4:-0}" != 0 ]; then
+    echo in-progress
+  elif [ "$3" -gt 0 ]; then
+    echo nested-repo
+  else
+    echo commit
+  fi
+}
+
+# コミットを試みたあとの結果の分類。$1 = add -A と commit をあわせた終了コード、$2 = コミット後の汚れの行数（-1 = 確認できなかった）、
+# $3 = そのうち submodule 由来の行数、$4 = コミットの実体（made = HEAD が進み、前の HEAD との差分が空でない / それ以外 = 進んでいない・
+# 差分が空・確認できなかった。省略は made）。標準出力:
+#   committed      コミットが成功し、同じ観測でもう汚れが無い（退避完了）
+#   commit-failed  add か commit が失敗した（フックの拒否を含む。--no-verify で回避しない）
+#   empty-commit   終了コードは成功だが、HEAD が進んでいない・進んだが差分が空（フックが commit のあとで変更を捨てた〔reset --hard など〕）。
+#                  汚れが無くても退避できていない
+#   unverified     コミット後の汚れを確認できなかった
+#   submodule      コミット後も submodule 内の未コミットの変更が残る（親のコミットには入らない）。コミットできるものが無く commit が
+#                  失敗した場合〔残る汚れが全部 submodule 由来〕もここに入れる
+#   residual-dirty コミット後も汚れが残る（フックがファイルを書き換えた・グローバルの除外に載った未追跡ファイルなど。add -A は
+#                  利用者の除外設定に従うが、汚れの観測は従わない）
+# コミットの終了コードだけで退避完了とせず、コミット後の観測が空であることを要件にする
+rp_wip_after() {
+  if [ "$1" != 0 ]; then
+    if [ "$2" -gt 0 ] && [ "$2" -eq "$3" ]; then
+      echo submodule
+    else
+      echo commit-failed
+    fi
+  elif [ "${4:-made}" != made ]; then
+    echo empty-commit
+  elif [ "$2" -lt 0 ]; then
+    echo unverified
+  elif [ "$2" -eq 0 ]; then
+    echo committed
+  elif [ "$3" -gt 0 ]; then
+    echo submodule
+  else
+    echo residual-dirty
+  fi
+}
+
+# WIP の結果の語のうち、退避が完了している（取り残す未コミット変更が無い）もの。$1 = 語。ホストの wipCommitted になる。
+# skipped は退避の対象が無い（dead worktree・branch だけの残骸）
+rp_wip_ok() {
+  case "$1" in
+    none | committed | skipped) return 0 ;;
+  esac
+  return 1
+}
+
+# base との差分の三値判定。$1 = base を取得できたか（0 / 1）、$2 = ブランチが実在するか（0 / 1）、$3 = `git diff --quiet <base>...<branch>` の終了コード。
+# 標準出力: empty（差分が空）/ nonempty / unknown（取得に失敗した・ブランチが無い・diff を実行できなかった）。
+# 取得に失敗した状態を empty に倒さない（empty は discard の根拠になる）
+rp_diff_state() {
+  if [ "$1" != 1 ] || [ "$2" != 1 ]; then
+    echo unknown
+  elif [ "$3" = 0 ]; then
+    echo empty
+  elif [ "$3" = 1 ]; then
+    echo nonempty
+  else
+    echo unknown
+  fi
+}
+
+# 40 桁の 16 進（小文字）か。$1 = 値
+rp_is_sha() {
+  case "$1" in
+    *[!0-9a-f]*) return 1 ;;
+  esac
+  [ "${#1}" -eq 40 ]
+}

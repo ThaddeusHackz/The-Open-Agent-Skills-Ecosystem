@@ -1,0 +1,31 @@
+{
+  "version": "1.2.0",
+  "organization": "Capgo",
+  "date": "October 2026",
+  "abstract": "Guide for Capgo Cloud Build: API-key precedence, build init onboarding, credential save/update/export/migrate, build request store and artifact options, prescan, build needed gating, CI secrets, Xcode version pinning, and exact CLI error strings.",
+  "triggers": [
+    "capgo build",
+    "capgo cloud build",
+    "capgo build init",
+    "capgo build request",
+    "build credentials",
+    "build prescan",
+    "build needed",
+    "output upload",
+    "ipa download link",
+    "testflight upload capgo",
+    "play store upload capgo",
+    "No credentials found for this app and platform",
+    "Legacy provisioning profile format detected"
+  ],
+  "references": [
+    "https://capgo.app/docs/cli/reference/build/",
+    "https://capgo.app/docs/builder/getting-started/",
+    "https://capgo.app/docs/builder/ios/",
+    "https://capgo.app/docs/builder/android/",
+    "https://capgo.app/docs/builder/credentials/",
+    "https://capgo.app/docs/builder/prescan/",
+    "https://capgo.app/docs/builder/troubleshooting/",
+    "https://capgo.app/docs/builder/ci-ota-or-native/"
+  ]
+}

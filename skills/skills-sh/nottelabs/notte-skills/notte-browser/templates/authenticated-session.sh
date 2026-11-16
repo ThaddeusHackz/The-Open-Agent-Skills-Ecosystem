@@ -1,0 +1,245 @@
+#!/bin/bash
+# Authenticated Session Template
+# Login to a website using vault credentials with optional MFA support.
+#
+# Usage: NOTTE_VAULT_ID=vault_abc123 ./authenticated-session.sh
+#
+# Prerequisites:
+#   - notte CLI installed and authenticated (notte auth login)
+#   - jq installed (used to capture the explicit session ID)
+#   - A vault holding the credential for the target site. Add it ONCE, from a
+#     shell you control, with values expanded from environment variables:
+#
+#     notte vaults create --name "MyVault"
+#     notte vaults credentials add --vault-id <vault-id> \
+#       --url "https://example.com" \
+#       --email "$MYSITE_EMAIL" \
+#       --password "$MYSITE_PASSWORD" \
+#       --mfa-secret "$MYSITE_MFA_SECRET"   # Optional
+#
+# HOW THIS WORKS - read before editing:
+#   This script never reads your password. It attaches the vault to the session
+#   with --vault-id and selects credentials with --vault-field; Notte substitutes
+#   the real credential server-side, before the keystrokes reach the page. That
+#   keeps both sentinels and secrets out of argv, `ps`, this file, and logs.
+#
+#   Do NOT "improve" this by calling `notte vaults credentials get` and filling
+#   the returned password - that pulls the plaintext secret into the shell and
+#   into argv, which is exactly what the vault exists to prevent.
+
+set -euo pipefail
+
+# Configuration - customize these for your site
+LOGIN_URL="https://example.com/login"
+DASHBOARD_URL="https://example.com/dashboard"  # URL after successful login
+VAULT_ID="${NOTTE_VAULT_ID:-}"                 # Required: set via env or edit here
+
+# Login form selectors (use Playwright-compatible selectors, or IDs from observe)
+EMAIL_SELECTOR="input[type='email']"
+PASSWORD_SELECTOR="input[type='password']"
+SUBMIT_SELECTOR="button[type='submit']"
+MFA_SELECTOR="input[name='otp']"  # Optional: selector for MFA input
+
+# Set to true if the site's first field takes a username rather than an email
+USE_USERNAME=false
+
+# Cookie persistence
+SAVE_COOKIES=true
+COOKIES_FILE="./session_cookies.json"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+SESSION_ID=""
+
+log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+log_step() { echo -e "${BLUE}[STEP]${NC} $1"; }
+
+cleanup() {
+    if [[ "${KEEP_SESSION:-false}" != "true" && -n "$SESSION_ID" ]]; then
+        log_info "Stopping session..."
+        notte sessions stop --session-id "$SESSION_ID" --yes 2>/dev/null || true
+    else
+        log_info "Keeping session alive (KEEP_SESSION=true)"
+    fi
+}
+
+trap cleanup EXIT
+
+# Decide whether we are logged in.
+#
+# Prefer a positive signal (we reached an authenticated URL) over scanning page
+# text for words like "error" - plenty of legitimate pages contain that word,
+# and a text scan cannot distinguish "login failed" from a cookie banner. If we
+# cannot prove success, return failure rather than assuming it.
+check_login_success() {
+    local current_url
+    current_url=$(notte page observe --session-id "$SESSION_ID" -o json | jq -r '.url // empty')
+
+    if [[ -z "$current_url" ]]; then
+        log_warn "Could not read current URL from observe"
+        return 1
+    fi
+
+    # Still sitting on the login page means the login did not go through.
+    if [[ "$current_url" == "$LOGIN_URL"* ]] || [[ "$current_url" == *"/login"* ]]; then
+        return 1
+    fi
+
+    # Reached the expected post-login destination.
+    if [[ "$current_url" == "$DASHBOARD_URL"* ]]; then
+        return 0
+    fi
+
+    # Anywhere else off the login page: treat as success only if the dashboard
+    # itself loads without bouncing back to login.
+    notte page goto --session-id "$SESSION_ID" "$DASHBOARD_URL"
+    notte page wait --session-id "$SESSION_ID" 1500
+    current_url=$(notte page observe --session-id "$SESSION_ID" -o json | jq -r '.url // empty')
+    [[ "$current_url" == "$DASHBOARD_URL"* ]]
+}
+
+restore_cookies() {
+    if [[ -f "$COOKIES_FILE" ]]; then
+        log_step "Restoring saved cookies..."
+        if notte sessions cookies-set --session-id "$SESSION_ID" --file "$COOKIES_FILE" 2>/dev/null; then
+            log_info "Cookies restored"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+save_cookies() {
+    if [[ "$SAVE_COOKIES" == "true" ]]; then
+        log_step "Saving session cookies..."
+        notte sessions cookies --session-id "$SESSION_ID" -o json > "$COOKIES_FILE"
+        chmod 600 "$COOKIES_FILE"
+        log_info "Cookies saved to $COOKIES_FILE (mode 600 - these are session secrets)"
+    fi
+}
+
+perform_login() {
+    log_step "Navigating to login page..."
+    notte page goto --session-id "$SESSION_ID" "$LOGIN_URL"
+    notte page observe --session-id "$SESSION_ID" > /dev/null
+    notte page wait --session-id "$SESSION_ID" 1000
+
+    # Select the identifier field by name; the vault supplies the value.
+    if [[ "$USE_USERNAME" == "true" ]]; then
+        log_info "Filling username (vault-substituted)"
+        notte page fill --session-id "$SESSION_ID" "$EMAIL_SELECTOR" --vault-field username
+    else
+        log_info "Filling email (vault-substituted)"
+        notte page fill --session-id "$SESSION_ID" "$EMAIL_SELECTOR" --vault-field email
+    fi
+    notte page wait --session-id "$SESSION_ID" 300
+
+    log_info "Filling password (vault-substituted)"
+    notte page fill --session-id "$SESSION_ID" "$PASSWORD_SELECTOR" --vault-field password
+    notte page wait --session-id "$SESSION_ID" 300
+
+    log_step "Submitting login form..."
+    notte page click --session-id "$SESSION_ID" "$SUBMIT_SELECTOR"
+    notte page wait --session-id "$SESSION_ID" 2000
+
+    # Check for an MFA prompt
+    local observe_result
+    observe_result=$(notte page observe --session-id "$SESSION_ID" -o json)
+
+    if echo "$observe_result" | grep -qiE "(mfa|two.?factor|verification|authenticator|2fa|one.?time)"; then
+        log_step "MFA prompt detected"
+        handle_mfa
+    fi
+}
+
+handle_mfa() {
+    # The MFA vault field produces a TOTP from the --mfa-secret stored in the
+    # vault. Store the seed instead of hardcoding a code here.
+    log_info "Filling MFA code (vault-generated TOTP)"
+    notte page fill --session-id "$SESSION_ID" "$MFA_SELECTOR" --vault-field mfa --enter
+    notte page wait --session-id "$SESSION_ID" 3000
+
+    local current_url
+    current_url=$(notte page observe --session-id "$SESSION_ID" -o json | jq -r '.url // empty')
+
+    if echo "$current_url" | grep -qiE "(mfa|verify|2fa)"; then
+        log_warn "Still on the MFA page."
+        log_warn "Confirm the vault credential for $LOGIN_URL has --mfa-secret set:"
+        log_warn "  notte vaults credentials list --vault-id $VAULT_ID"
+    fi
+}
+
+main() {
+    log_info "=== Authenticated Session ==="
+    log_info "Target: $LOGIN_URL"
+
+    if [[ -z "$VAULT_ID" ]]; then
+        log_error "No vault configured. Set NOTTE_VAULT_ID or edit VAULT_ID."
+        log_info "To set up a vault (run once, from a shell you control):"
+        log_info "  notte vaults create --name 'MyVault'"
+        log_info "  notte vaults credentials add --vault-id <vault-id> \\"
+        log_info "    --url '$LOGIN_URL' \\"
+        log_info "    --email \"\$MYSITE_EMAIL\" \\"
+        log_info "    --password \"\$MYSITE_PASSWORD\""
+        exit 1
+    fi
+
+    # Attach the vault to the session so --vault-field fills can resolve.
+    log_step "Starting browser session with vault attached..."
+    local session_result
+    session_result=$(notte sessions start --vault-id "$VAULT_ID" -o json)
+    if ! SESSION_ID=$(echo "$session_result" | jq -er '
+        .session_id // .sessionId // .id
+        | select(type == "string" and length > 0)
+    '); then
+        SESSION_ID=""
+        log_error "Session start returned no valid session ID"
+        exit 1
+    fi
+    log_info "Session started: $SESSION_ID"
+
+    # Try to restore cookies first (skip login if still valid)
+    if restore_cookies; then
+        log_step "Checking if the saved session is still valid..."
+        notte page goto --session-id "$SESSION_ID" "$DASHBOARD_URL"
+        notte page wait --session-id "$SESSION_ID" 2000
+
+        if check_login_success; then
+            log_info "=== Login successful (restored from cookies) ==="
+            save_cookies  # Refresh
+            return 0
+        fi
+        log_warn "Saved session expired, performing fresh login..."
+    fi
+
+    perform_login
+
+    if check_login_success; then
+        log_info "=== Login successful ==="
+        save_cookies
+    else
+        log_error "=== Login failed ==="
+        log_error "Check: the vault holds a credential for $LOGIN_URL, the"
+        log_error "selectors match the live form, and the session was started"
+        log_error "with --vault-id."
+        exit 1
+    fi
+
+    log_step "Navigating to dashboard..."
+    notte page goto --session-id "$SESSION_ID" "$DASHBOARD_URL"
+    notte page wait --session-id "$SESSION_ID" 1000
+
+    log_info "Ready for authenticated actions"
+    log_info "Session ID: $SESSION_ID"
+
+    # Example: Scrape data from the authenticated page
+    # notte page scrape --session-id "$SESSION_ID" --instructions "Extract user profile information"
+}
+
+main "$@"

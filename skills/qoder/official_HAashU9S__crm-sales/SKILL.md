@@ -1,0 +1,777 @@
+---
+name: crm-sales
+description: >
+  Run the full sales cycle on Partners in Biz: contacts, leads, deals, pipeline, quotes, proposals,
+  activity logging, AI-generated contact briefs, public lead-capture forms, form submission triage,
+  dynamic contact segments, CRM integrations (Mailchimp, HubSpot, Google Contacts), capture source
+  attribution, and bulk contact import.
+  Use this skill whenever the user mentions anything related to sales or CRM, including but not limited
+  to: "add a contact", "new lead", "import contacts", "bulk import", "CSV import", "tag contact",
+  "remove tag", "filter by tag", "qualify lead", "convert lead to client", "contact brief",
+  "brief me on this contact", "AI contact summary", "new deal", "create deal",
+  "move deal to negotiation", "deal stage", "close deal", "deal won", "deal lost", "win rate",
+  "pipeline value", "pipeline report", "log a call", "log email", "activity history", "draft a quote",
+  "send proposal", "create proposal", "quote accepted", "quote rejected", "convert quote to invoice",
+  "create a form", "lead form", "contact form", "form submissions", "new form submission",
+  "review submissions", "schedule meeting with contact", "task for this deal", "comment on contact",
+  "comment on deal", "leave a note on deal", "@mention sales rep", "sales notification",
+  "create segment", "dynamic list", "audience segment", "resolve segment", "who is in this segment",
+  "connect Mailchimp", "connect HubSpot", "sync contacts", "CRM integration", "capture source",
+  "lead source", "where did this contact come from", "attribution". If in doubt, trigger — this skill
+  owns the full lead-to-won lifecycle.
+---
+
+# CRM & Sales — Partners in Biz Platform API
+
+Covers the full sales funnel: contacts (leads → prospects → clients → churned), deals with stages, activity logging, quotes/proposals, AI contact briefings, and public lead-capture forms with submission triage.
+
+## Base URL & Authentication
+
+```
+https://partnersinbiz.online/api/v1
+```
+
+```
+Authorization: Bearer <AI_API_KEY>
+```
+
+Except for `POST /forms/[slug]/submit` which is **public** (no auth required).
+
+## orgId conventions
+
+- `contacts`, `deals`, `activities`, `quotes`, `forms`, `form_submissions` all carry `orgId` as a field.
+- **Important current limitation:** legacy `contacts` and `deals` may not have `orgId` set. When you create new ones, always pass `orgId` in the body so webhook dispatch works.
+- For filters: pass `?orgId=X` as query param on GET.
+
+## Collaboration primitives
+
+- **Idempotency**: `POST /crm/contacts`, `POST /crm/deals`, `POST /quotes`, `POST /tasks` accept `Idempotency-Key` header
+- **Comments** (`resourceType: 'contact' | 'deal' | 'quote' | 'form_submission'`): leave internal notes with `@user:<uid>` / `@agent:<id>` mentions
+- **Tasks** linked to contacts/deals: `POST /tasks` with `contactId` / `dealId` — see `project-management` skill
+- **Calendar events** linked to contacts/deals: `POST /calendar/events` with `relatedTo: { type: 'contact'|'deal', id }` — see `project-management` skill
+
+## Response envelope
+
+```json
+{ "success": true, "data": { ... }, "meta": { "total": 50, "page": 1, "limit": 20 } }
+```
+
+---
+
+## API Reference
+
+### Contacts
+
+#### `GET /crm/contacts` — auth: admin
+List contacts with filters.
+
+Query params:
+- `stage` — `new`|`contacted`|`replied`|`demo`|`proposal`|`won`|`lost`
+- `type` — `lead`|`prospect`|`client`|`churned`
+- `source` — `manual`|`form`|`import`|`outreach`
+- `tags` — comma-separated (array-contains-any, max 10)
+- `search` — name/email/company contains (in-memory after fetch)
+- `page` (default 1), `limit` (default 50, max 200)
+
+Response: array of `Contact`:
+```json
+{ "id": "contact_abc", "orgId": "org_xyz", "name": "Jane Doe", "email": "jane@acme.com",
+  "phone": "+27...", "company": "Acme", "website": "https://acme.com",
+  "source": "form", "type": "lead", "stage": "new",
+  "tags": ["enterprise", "south-africa"], "notes": "...", "assignedTo": "user_123",
+  "createdAt": "...", "updatedAt": "...", "lastContactedAt": null, "deleted": false }
+```
+
+#### `POST /crm/contacts` — auth: admin
+Required: `orgId`, `name`, `email` (valid). Defaults: `source='manual'`, `type='lead'`, `stage='new'`, `tags=[]`.
+
+`orgId` is **required** — contacts must belong to an organisation so webhooks and org-scoped reports work. 400 if missing.
+
+Body:
+```json
+{
+  "orgId": "org_xyz",  
+  "name": "Jane Doe",
+  "email": "jane@acme.com",
+  "phone": "+27...",
+  "company": "Acme",
+  "website": "https://acme.com",
+  "source": "form",
+  "type": "lead",
+  "stage": "new",
+  "tags": ["enterprise"],
+  "notes": "Met at conference",
+  "assignedTo": "user_123"
+}
+```
+
+Response (201): `{ "id": "contact_abc" }`. Dispatches `contact.created` webhook when `orgId` present.
+
+#### `GET /crm/contacts/[id]` — auth: admin
+Full contact.
+
+#### `PUT /crm/contacts/[id]` — auth: admin
+Update any contact field. Records `updatedAt`. Dispatches `contact.updated` webhook.
+
+#### `DELETE /crm/contacts/[id]` — auth: admin
+Soft-delete (`deleted: true`).
+
+#### `GET /crm/contacts/[id]/activities` — auth: admin
+Activity timeline for this contact. Sorted `createdAt desc`.
+
+#### `POST /crm/contacts/[id]/activities` — auth: admin
+Log activity. Body: `{ type, summary, dealId?, metadata? }`. `type`: `email_sent`|`email_received`|`call`|`note`|`stage_change`|`sequence_enrolled`|`sequence_completed`.
+
+#### `POST /crm/contacts/[id]/tags` — auth: admin
+Atomic tag update. Body: `{ add?: string[], remove?: string[] }`. Uses Firestore `arrayUnion` / `arrayRemove`. Returns `{ id, tags }` (post-update).
+
+### Deals
+
+#### `GET /crm/deals` — auth: admin
+Filters: `stage`, `contactId`, `page`, `limit`.
+
+Response: array of `Deal`:
+```json
+{ "id": "deal_xyz", "orgId": "org_abc", "contactId": "contact_abc",
+  "title": "Acme - Pro Plan - Annual", "value": 12000, "currency": "ZAR",
+  "stage": "proposal", "expectedCloseDate": "2026-05-30", "notes": "...",
+  "createdAt": "...", "updatedAt": "...", "deleted": false }
+```
+
+#### `POST /crm/deals` — auth: admin
+Required: `orgId`, `title`, `contactId`. Defaults: `value=0`, `currency='USD'`, `stage='discovery'`.
+Currencies: `USD`, `EUR`, `ZAR`. `orgId` is **required** — 400 if missing. Dispatches `deal.created`.
+
+#### `GET/PUT/DELETE /crm/deals/[id]` — auth: admin
+PUT dispatches `deal.stage_changed` when `stage` changes; if new stage is `won` → also `deal.won`; if `lost` → also `deal.lost`.
+
+### CRM activities (cross-cutting)
+
+#### `GET /crm/activities` — auth: admin
+All activities across contacts/deals. Filters: `contactId`, `dealId`, `type`, `from`, `to`, `page`, `limit`.
+
+#### `POST /crm/activities` — auth: admin
+Log an activity not tied to a specific contact resource (e.g., generic meeting note).
+
+### Quotes
+
+#### `GET /quotes` — auth: admin
+List quotes. Filter `?orgId=X`. Sorted `createdAt desc`, limit 50.
+
+#### `POST /quotes` — auth: admin
+Required: `orgId` (the client org), `lineItems: [{ description, quantity, unitPrice }]`.
+
+Body:
+```json
+{
+  "orgId": "org_abc",
+  "lineItems": [{ "description": "Implementation", "quantity": 1, "unitPrice": 50000 }],
+  "taxRate": 15,
+  "currency": "ZAR",
+  "notes": "...",
+  "validUntil": "2026-05-31"
+}
+```
+
+Auto-snapshots: `fromDetails` (from platform owner org), `clientDetails` (from client org `billingDetails`).
+Auto-computes: `subtotal`, `taxAmount`, `total`. Assigns sequential `quoteNumber`.
+
+Response (201): `{ id, quoteNumber }`. Dispatches `quote.created`.
+
+#### `GET /quotes/[id]` — auth: admin
+Full quote.
+
+#### `PATCH /quotes/[id]` — auth: admin
+Update fields. Status transitions: `draft` → `sent` → `accepted` | `rejected` | `converted`.
+- On `status=accepted`: dispatches `quote.accepted`
+- On `status=rejected`: dispatches `quote.rejected`
+- On `status=converted`: typically paired with creating an invoice from the quote
+
+#### `DELETE /quotes/[id]` — auth: admin
+Soft-delete.
+
+### AI Contact Brief
+
+#### `GET /ai/contact-brief/[id]` — auth: admin
+Generates an AI-written briefing on a contact using their activity history + company info.
+
+Returns:
+```json
+{ "contactId": "contact_abc", "brief": "Markdown briefing...",
+  "talkingPoints": ["..."], "recentActivity": [...], "generatedAt": "..." }
+```
+
+Use this before any outbound call or email.
+
+### Forms (lead capture)
+
+#### `GET /forms` — auth: admin
+List. Filters: `orgId` (required), `active`, `search`, `page`, `limit`.
+
+#### `POST /forms` — auth: admin (idempotent)
+Create a form.
+
+Body:
+```json
+{
+  "orgId": "org_abc",
+  "name": "Homepage Enquiry",
+  "slug": "homepage-enquiry",
+  "title": "Get in touch",
+  "description": "...",
+  "fields": [
+    { "id": "name", "type": "text", "label": "Your name", "required": true },
+    { "id": "email", "type": "email", "label": "Email", "required": true },
+    { "id": "message", "type": "textarea", "label": "How can we help?", "required": false }
+  ],
+  "thankYouMessage": "Thanks — we'll be in touch.",
+  "notifyEmails": ["sales@acme.com"],
+  "redirectUrl": null,
+  "createContact": true,
+  "rateLimitPerMinute": 10,
+  "active": true
+}
+```
+
+`slug` must be unique per org. Supported field types: `text`, `textarea`, `email`, `phone`, `number`, `select`, `multiselect`, `checkbox`, `radio`, `date`, `file`, `hidden`.
+
+**Optional Turnstile (Cloudflare) CAPTCHA**: include `turnstileEnabled: true` and `turnstileSiteKey: "<site_key>"` on the form. Requires `TURNSTILE_SECRET_KEY` env var. Public page embeds `<div class="cf-turnstile" data-sitekey="<siteKey>">` and the widget's hidden `cf-turnstile-response` field must be submitted with the body. Submit endpoint verifies against Cloudflare and rejects invalid tokens with 400.
+
+Response (201): `{ id, slug }`.
+
+#### `GET/PUT/DELETE /forms/[id]` — auth: admin
+`slug` can only change if no submissions exist yet (409 otherwise).
+
+#### `POST /forms/[slug]/submit` — **public, no auth**
+Query param: `?orgId=X` (required). Body is the form data keyed by `fieldId`.
+
+Safeguards:
+- Form must be `active: true`
+- Honeypot field `_hp` — if populated, silent accept (returns 200 with thankYouMessage)
+- Per-IP rate limit (default 10/min, configurable on form)
+- Field validation (type, required, min/max, pattern)
+- Optional Cloudflare Turnstile CAPTCHA — set `turnstileEnabled: true` + `turnstileSiteKey` on the form. The public widget injects `cf-turnstile-response`; the server verifies via `TURNSTILE_SECRET_KEY`
+
+Response:
+```json
+{ "success": true, "data": {
+    "submitted": true, "thankYou": "Thanks — we'll be in touch.", "redirectUrl": null } }
+```
+
+If `createContact: true` and `email` is valid, upserts a `Contact` (source=`form`) and links it via `contactId` on the submission. Dispatches `form.submitted` webhook.
+
+#### `GET /forms/[id]/submissions` — auth: admin
+Filters: `status` (`new`|`read`|`archived`), `from`, `to`, `page`, `limit`.
+
+#### `GET/PATCH /forms/[id]/submissions/[subId]` — auth: admin
+PATCH updates `status`.
+
+### Comments on CRM resources
+
+#### `POST /comments`
+```json
+{ "orgId": "org_abc", "resourceType": "deal", "resourceId": "deal_xyz",
+  "body": "Sending renewal quote tomorrow. @user:uid123 please review." }
+```
+
+Supported `resourceType` for this skill: `contact`, `deal`, `quote`, `form_submission`.
+
+### Tasks & meetings linked to contacts/deals
+
+See the `project-management` skill for full task and calendar APIs. Quick patterns used here:
+
+```bash
+# Task for a deal
+POST /tasks
+{ "orgId": "org_abc", "title": "Send proposal draft", "dueDate": "2026-04-20",
+  "priority": "high", "dealId": "deal_xyz", "assignedTo": { "type": "user", "id": "uid123" } }
+
+# Meeting with contact
+POST /calendar/events
+{ "orgId": "org_abc", "title": "Acme demo", "startAt": "2026-04-22T14:00:00Z",
+  "endAt": "2026-04-22T15:00:00Z",
+  "relatedTo": { "type": "contact", "id": "contact_abc" },
+  "attendees": [{ "name": "Jane Doe", "email": "jane@acme.com", "status": "pending" }] }
+```
+
+---
+
+## Workflow guides
+
+### 1. Lead → form → contact → deal → quote → won
+
+```bash
+# Lead submits form (public)
+POST /forms/homepage-enquiry/submit?orgId=org_abc
+{ "name": "Jane", "email": "jane@acme.com", "message": "..." }
+# → createContact:true upserts Contact, dispatches form.submitted
+
+# Sales rep qualifies
+PUT /crm/contacts/contact_abc
+{ "stage": "contacted", "type": "prospect" }
+
+# Create deal
+POST /crm/deals
+{ "orgId": "org_abc", "contactId": "contact_abc",
+  "title": "Acme - Pro Plan", "value": 12000, "currency": "ZAR", "stage": "discovery" }
+
+# Get AI brief before demo call
+GET /ai/contact-brief/contact_abc
+
+# Log the call
+POST /crm/contacts/contact_abc/activities
+{ "type": "call", "summary": "30-min demo — ready for proposal", "dealId": "deal_xyz" }
+
+# Move deal forward
+PUT /crm/deals/deal_xyz
+{ "stage": "proposal" }   # dispatches deal.stage_changed
+
+# Create quote
+POST /quotes
+{ "orgId": "org_abc", "lineItems": [{ "description": "Pro Plan — annual",
+  "quantity": 1, "unitPrice": 12000 }], "taxRate": 15, "currency": "ZAR" }
+
+# Send quote externally, then mark accepted
+PATCH /quotes/quote_123
+{ "status": "accepted" }  # dispatches quote.accepted
+
+# Close-won
+PUT /crm/deals/deal_xyz
+{ "stage": "won" }  # dispatches deal.stage_changed + deal.won
+
+# Convert: create invoice (see billing-finance skill)
+```
+
+### 2. Tag and segment contacts
+
+```bash
+# Bulk tag adds via individual calls (no bulk endpoint today)
+POST /crm/contacts/contact_abc/tags
+{ "add": ["enterprise", "south-africa"] }
+
+# Filter by tags
+GET /crm/contacts?tags=enterprise,south-africa
+```
+
+### 3. Build a public lead-capture form
+
+```bash
+POST /forms
+{ "orgId": "org_abc", "name": "Demo request", "slug": "demo-request", ... }
+
+# Public URL to embed:
+#   <form action="https://partnersinbiz.online/api/v1/forms/demo-request/submit?orgId=org_abc" method="POST">
+
+GET /forms/form_123/submissions?status=new  # triage inbox
+```
+
+### 4. Pipeline view
+
+Use the `platform-ops` skill's `/reports/pipeline` endpoint for `byStage` counts + values + win rate.
+
+## Error reference
+
+| HTTP | Error | Fix |
+|------|-------|-----|
+| 400 | `Name is required` / `Email is required` | Supply field |
+| 400 | `Email is invalid` | Valid format |
+| 400 | `Invalid stage` / `Invalid currency` | Use allowed values |
+| 400 | `tags param exceeds 10` | Split into smaller batches |
+| 400 | `Missing _orgId_ query param` (form submit) | Include `?orgId=X` |
+| 400 | Form validation errors | Check field constraints |
+| 400 | `tags filter supports up to 10 values` | Reduce segment `tags` filter array |
+| 400 | `rows must be an array` / `rows must not be empty` | Check import body |
+| 400 | `rows exceeds maximum of 5000` | Split import into smaller batches |
+| 400 | `provider is required` / `name is required` | Supply fields on integration create |
+| 400 | `config.<field> is required for <Provider>` | Supply all required provider config fields |
+| 400 | `No editable fields supplied` | Send at least one editable field on PUT |
+| 400 | `Invalid or missing type` (capture source) | Use `form`\|`api`\|`csv`\|`integration`\|`manual` |
+| 404 | `Contact not found` / `Deal not found` | Verify ID |
+| 404 | `Segment not found` / `Integration not found` / `CaptureSource not found` | Verify ID |
+| 409 | `Cannot change slug after submissions exist` | Use new form or archive old |
+| 422 | `<Provider> is not yet available` | Provider marked `comingSoon` |
+| 422 | `A sync is already in progress` | Wait for current sync to finish |
+| 422 | `Integration is paused — resume it first` | PUT `status: 'active'` then retry sync |
+| 429 | Form rate limit exceeded | Retry after `Retry-After` seconds |
+
+## Agent patterns
+
+1. **Always pass `orgId`** on new contacts/deals — webhook dispatch depends on it.
+2. **Get a contact brief before calls** — `GET /ai/contact-brief/[id]` is cheap and rich.
+3. **Log activities proactively** — AI should log every call/email so future briefs are accurate.
+4. **Use tags for segmentation** — cheaper than custom fields and queryable with `array-contains-any`.
+5. **Webhook subscriptions** — listen for `contact.created`, `deal.won`, `form.submitted` to trigger downstream flows (see `platform-ops`).
+6. **Idempotency** — pass `Idempotency-Key` on creates to dedupe.
+
+---
+
+### CRM Segments (dynamic contact lists)
+
+Segments are named, saved filter sets that resolve to a live list of matching contacts on demand. They are the right tool whenever you need to operate on a subset of contacts — bulk-enrol in a campaign, preview audience size, or hand off a list to email-outreach.
+
+#### `GET /crm/segments?orgId=...` — auth: client
+List all segments for an org. Returns segments ordered `createdAt desc`, excluding soft-deleted.
+
+Response: array of `Segment`:
+```json
+{ "id": "seg_abc", "orgId": "org_xyz", "name": "Enterprise SA leads",
+  "description": "...", "filters": { ... },
+  "createdAt": "...", "updatedAt": "..." }
+```
+
+#### `POST /crm/segments` — auth: client
+Create a segment. Required: `orgId`, `name`. `filters` is optional (empty = all contacts in org).
+
+Body:
+```json
+{
+  "orgId": "org_xyz",
+  "name": "Enterprise SA leads",
+  "description": "High-value SA prospects not yet in demo stage",
+  "filters": {
+    "tags": ["enterprise", "south-africa"],
+    "stage": "contacted",
+    "type": "prospect",
+    "source": "form",
+    "capturedFromIds": ["src_abc", "src_def"],
+    "createdAfter": "2026-01-01T00:00:00Z"
+  }
+}
+```
+
+**Filter fields:**
+
+| Field | Type | Behaviour |
+|---|---|---|
+| `tags` | `string[]` (max 10) | OR match — contact must have at least one of these tags (`array-contains-any`) |
+| `capturedFromIds` | `string[]` (max 10) | OR match — contact was captured by one of these `CaptureSource` ids |
+| `stage` | `string` | Exact match — `new`\|`contacted`\|`replied`\|`demo`\|`proposal`\|`won`\|`lost` |
+| `type` | `string` | Exact match — `lead`\|`prospect`\|`client`\|`churned` |
+| `source` | `string` | Exact match — `manual`\|`form`\|`import`\|`outreach` |
+| `createdAfter` | ISO 8601 timestamp | Contact `createdAt >= value` |
+
+All filters are ANDed together. The resolver always excludes deleted, unsubscribed, and bounced contacts regardless of filters.
+
+Constraint: `tags` array-contains-any limit is 10. Return 400 if exceeded.
+
+Response (201): `{ "id": "seg_abc" }`
+
+#### `GET /crm/segments/[id]` — auth: client
+Fetch one segment (full object including filters).
+
+#### `PUT /crm/segments/[id]` — auth: client
+Update `name`, `description`, and/or `filters`. Any field omitted is left unchanged. `name` cannot be set to empty string.
+
+#### `DELETE /crm/segments/[id]` — auth: client
+Soft-delete (`deleted: true`).
+
+#### `POST /crm/segments/[id]/resolve` — auth: client
+Execute the segment's saved filters and return matching contacts. No body required.
+
+Response:
+```json
+{
+  "count": 142,
+  "ids": ["contact_1", "contact_2", "..."],
+  "contacts": [ /* first 50 full contact docs for preview */ ]
+}
+```
+
+- `count` — total matched (capped at 5000 internally; if `count == 5000` assume there may be more)
+- `ids` — every matched contact id — use this to bulk-enrol contacts into a campaign
+- `contacts` — first 50 full contact objects for display/preview
+
+**Typical pattern: resolve then enrol**
+```bash
+# 1. Resolve the segment
+POST /crm/segments/seg_abc/resolve
+# → { count: 142, ids: ["contact_1", ...], contacts: [...] }
+
+# 2. Enrol all ids into a campaign (see email-outreach skill)
+POST /email-outreach/campaigns/camp_xyz/enrol
+{ "contactIds": ["contact_1", "contact_2", ...] }
+```
+
+---
+
+### CRM Integrations (third-party contact sync)
+
+CRM integrations pull contacts from external systems (Mailchimp, HubSpot, Google Contacts, Zapier) into the PiB contact database on demand or on a cadence.
+
+**Supported providers:**
+
+| Provider | `provider` value | Status | Required config |
+|---|---|---|---|
+| Mailchimp | `mailchimp` | Live | `apiKey` (with data-centre suffix, e.g. `-us21`), `listId` (Audience ID) |
+| HubSpot | `hubspot` | Live | `accessToken` (Private App token with `crm.objects.contacts.read`) |
+| Google Contacts | `gmail` | Live | `refreshToken` (OAuth2 with `contacts.readonly` scope); `clientId` / `clientSecret` optional (defaults to platform client) |
+| Zapier / n8n / Make | `zapier` | No integration record needed | Use a `CaptureSource` of type `api` and POST to the public capture endpoint |
+
+Sensitive config values (`apiKey`, `accessToken`, `refreshToken`, `clientSecret`) are AES-256-GCM encrypted in Firestore and never returned in API responses. `configPreview` in the public view redacts them to `•••••<last4>`.
+
+#### `GET /crm/integrations?orgId=...` — auth: client
+List integrations for an org. Returns `PublicCrmIntegrationView[]` (config redacted).
+
+Response:
+```json
+[{
+  "id": "intg_abc",
+  "provider": "mailchimp",
+  "name": "Main audience",
+  "status": "active",
+  "cadenceMinutes": 60,
+  "autoTags": ["mailchimp"],
+  "autoCampaignIds": [],
+  "lastSyncedAt": "2026-05-07T08:00:00Z",
+  "lastSyncStats": { "imported": 320, "created": 12, "updated": 4, "skipped": 0, "errored": 0 },
+  "lastError": "",
+  "configPreview": { "apiKey": "•••••us21", "listId": "a1b2c3d4e5" }
+}]
+```
+
+#### `POST /crm/integrations` — auth: client
+Create an integration. Required: `orgId`, `provider`, `name`, all provider-required config fields.
+
+Body:
+```json
+{
+  "orgId": "org_xyz",
+  "provider": "mailchimp",
+  "name": "Main newsletter list",
+  "config": {
+    "apiKey": "abc123-us21",
+    "listId": "a1b2c3d4e5"
+  },
+  "autoTags": ["mailchimp", "newsletter"],
+  "autoCampaignIds": [],
+  "cadenceMinutes": 60
+}
+```
+
+- `cadenceMinutes: 0` — manual sync only (no automatic cadence)
+- `autoTags` — tags applied to every contact imported through this integration
+- `autoCampaignIds` — campaigns to auto-enrol new contacts on import
+- Initial `status` is `pending` (changes to `active` or `error` after first sync)
+
+Response (201): `PublicCrmIntegrationView` with `configPreview`.
+
+#### `GET /crm/integrations/[id]` — auth: client
+Fetch one integration (public view, config redacted).
+
+#### `PUT /crm/integrations/[id]` — auth: client
+Update editable fields. Supports partial update — only supplied fields change.
+
+Editable: `name`, `config` (merged into existing, re-encrypted), `autoTags`, `autoCampaignIds`, `cadenceMinutes`, `status` (`paused`|`active` only — use to pause/resume).
+
+Response: updated `PublicCrmIntegrationView`.
+
+#### `DELETE /crm/integrations/[id]` — auth: client
+Soft-delete.
+
+#### `POST /crm/integrations/[id]/sync` — auth: client
+Manually trigger a sync run. No body required.
+
+**Status lifecycle during sync:**
+1. Sets `status = 'syncing'`
+2. Runs the provider handler (Mailchimp pulls audience members, HubSpot pulls contacts, etc.)
+3. On success: `status = 'active'`, writes `lastSyncedAt` + `lastSyncStats`
+4. On failure: `status = 'error'`, writes `lastError`
+
+Cannot trigger if integration is already `syncing`, `paused`, or `disabled` (returns 422).
+
+Response:
+```json
+{
+  "integration": { /* updated PublicCrmIntegrationView */ },
+  "ok": true,
+  "stats": { "imported": 320, "created": 12, "updated": 4, "skipped": 0, "errored": 0 },
+  "error": ""
+}
+```
+
+**Sync dedup behaviour:** existing contacts (matched by `orgId` + `email`) have their tags merged; name, company and other fields are not overwritten. Only net-new contacts increment `capturedCount`.
+
+---
+
+### Capture Sources (lead source attribution)
+
+A CaptureSource tracks where contacts come from. Every contact can carry a `capturedFromId` pointing to the source that created it, enabling attribution reporting and segmentation by source.
+
+**Types:**
+
+| `type` | Use case |
+|---|---|
+| `form` | Embeddable form widget on a client's website |
+| `api` | Public POST endpoint for Zapier / n8n / Make / custom integrations |
+| `csv` | Tracks a CSV import batch |
+| `integration` | Mailchimp / HubSpot / Google Contacts sync |
+| `manual` | Contact entered by hand in the portal |
+
+Each source has an opaque `publicKey` (32 hex chars) used to authenticate public POSTs to `/api/public/capture/[publicKey]`. Rotating the key immediately invalidates any deployed widgets or integrations using it.
+
+#### `GET /crm/capture-sources?orgId=...` — auth: client
+List capture sources for an org. Returns sources ordered `createdAt desc`, excluding soft-deleted.
+
+Response: array of `CaptureSource`:
+```json
+{
+  "id": "src_abc",
+  "orgId": "org_xyz",
+  "name": "Homepage contact form",
+  "type": "form",
+  "publicKey": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+  "enabled": true,
+  "autoTags": ["homepage", "inbound"],
+  "autoCampaignIds": ["camp_xyz"],
+  "redirectUrl": "https://acme.com/thank-you",
+  "consentRequired": false,
+  "capturedCount": 47,
+  "lastCapturedAt": "2026-05-06T14:22:00Z",
+  "createdAt": "...", "updatedAt": "..."
+}
+```
+
+#### `POST /crm/capture-sources` — auth: client
+Create a capture source. Required: `orgId`, `name`, `type`.
+
+Body:
+```json
+{
+  "orgId": "org_xyz",
+  "name": "Homepage contact form",
+  "type": "form",
+  "autoTags": ["homepage", "inbound"],
+  "autoCampaignIds": ["camp_xyz"],
+  "redirectUrl": "https://acme.com/thank-you",
+  "consentRequired": false
+}
+```
+
+- `publicKey` is generated automatically (do not supply it)
+- `enabled` defaults to `true`
+- `capturedCount` starts at 0
+
+Response (201): full `CaptureSource` including generated `publicKey`.
+
+#### `GET /crm/capture-sources/[id]` — auth: client
+Fetch one capture source.
+
+#### `PUT /crm/capture-sources/[id]` — auth: client
+Update editable fields: `name`, `enabled`, `autoTags`, `autoCampaignIds`, `redirectUrl`, `consentRequired`.
+
+Special: pass `"rotateKey": true` to regenerate the `publicKey`. This immediately invalidates any form widgets or integrations using the old key — deploy the new key before rotating.
+
+Response: updated `CaptureSource`.
+
+#### `DELETE /crm/capture-sources/[id]` — auth: client
+Soft-delete.
+
+**Linking sources to contacts:** pass `capturedFromId` when creating a contact (or on import via `capturedFromId` param). The source's `capturedCount` increments automatically on new contact creates. Use `capturedFromIds` in segment filters to target all contacts from a specific source.
+
+---
+
+### Contact Import (bulk CSV/JSON)
+
+#### `POST /crm/contacts/import` — auth: client
+
+Bulk-create up to 5,000 contacts from a parsed row array. Caller is responsible for CSV parsing — send the rows as JSON.
+
+Body:
+```json
+{
+  "orgId": "org_xyz",
+  "capturedFromId": "src_abc",
+  "defaultTags": ["imported-2026-05"],
+  "dryRun": false,
+  "rows": [
+    {
+      "email": "jane@acme.com",
+      "name": "Jane Doe",
+      "company": "Acme Corp",
+      "phone": "+27821234567",
+      "tags": ["enterprise"],
+      "notes": "Met at conf"
+    },
+    {
+      "email": "bob@startup.io",
+      "firstName": "Bob",
+      "lastName": "Smith"
+    }
+  ]
+}
+```
+
+**Row fields:**
+
+| Field | Required | Notes |
+|---|---|---|
+| `email` | Yes | Lowercased, validated. Rows with missing/invalid email are skipped. |
+| `name` | No | Used as-is if provided |
+| `firstName` + `lastName` | No | Combined into `name` if `name` is absent |
+| `company` | No | |
+| `phone` | No | |
+| `tags` | No | Merged with `defaultTags` and capture source `autoTags` |
+| `notes` | No | |
+
+**Top-level params:**
+
+| Param | Notes |
+|---|---|
+| `capturedFromId` | Optional. CaptureSource id — applies its `autoTags` and bumps `capturedCount` by new creates. Must belong to the same org or is silently ignored. |
+| `defaultTags` | Applied to every row, merged with per-row `tags` and source `autoTags`. |
+| `dryRun` | When `true`: validates and partitions rows (create vs update) without writing. Returns `previewSample` (first 4 normalized rows). Safe to call repeatedly before committing. |
+
+**Dedup behaviour:** contacts are matched by `orgId` + `email` (case-insensitive).
+- **New email** → creates contact with `source='import'`, `type='lead'`, `stage='new'`.
+- **Existing email** → merges tags only (no name/company/phone overwrite). Counted as `updated`.
+- **Duplicate email within the same payload** → second occurrence is skipped with `reason: 'duplicate email in payload'`.
+- Auto-campaign enrolment is intentionally skipped for imports to avoid surprise sends.
+
+**Response:**
+```json
+{
+  "created": 87,
+  "updated": 12,
+  "skipped": 3,
+  "invalidRows": [
+    { "index": 4, "reason": "email is invalid" },
+    { "index": 9, "reason": "email is required" }
+  ]
+}
+```
+
+Dry-run also includes:
+```json
+{
+  "previewSample": [
+    { "index": 0, "email": "jane@acme.com", "name": "Jane Doe",
+      "company": "Acme Corp", "phone": "+27821234567",
+      "tags": ["enterprise", "imported-2026-05"], "notes": "Met at conf",
+      "capturedFromId": "src_abc" }
+  ]
+}
+```
+
+**Limits:** max 5,000 rows per request. Committed in Firestore batch writes of 400 ops.
+
+**Typical CSV import flow:**
+```bash
+# 1. Create a CSV capture source (once per org)
+POST /crm/capture-sources
+{ "orgId": "org_xyz", "name": "May 2026 conference list", "type": "csv" }
+# → { "id": "src_conf_may" }
+
+# 2. Parse CSV client-side, dry-run first
+POST /crm/contacts/import
+{ "orgId": "org_xyz", "capturedFromId": "src_conf_may",
+  "defaultTags": ["conference-2026"], "dryRun": true,
+  "rows": [ { "email": "...", "name": "..." } ] }
+# → review invalidRows + previewSample
+
+# 3. Commit
+POST /crm/contacts/import
+{ "orgId": "org_xyz", "capturedFromId": "src_conf_may",
+  "defaultTags": ["conference-2026"], "dryRun": false,
+  "rows": [ ... ] }
+# → { "created": 210, "updated": 8, "skipped": 2, "invalidRows": [...] }
+```

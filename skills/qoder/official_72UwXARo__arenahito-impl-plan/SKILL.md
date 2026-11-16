@@ -1,0 +1,528 @@
+---
+name: impl-plan
+description: |
+  Skill for planning and designing coding tasks before implementation.
+  Use this skill ONLY when the user explicitly names or requests the `impl-plan` skill.
+  Do NOT use this skill automatically just because the user is asking for a plan, design, or a complex task breakdown. The decision to use `impl-plan` belongs to the user, not the agent.
+metadata:
+  short-description: Create and review implementation plans before coding
+---
+
+# Implementation Plan Skill
+
+Create implementation plans for software development tasks with sufficient detail for execution.
+
+## Activation
+
+Use this skill only when the user explicitly asks to use `impl-plan`.
+
+Do not activate it implicitly for generic planning requests such as "plan this", "design this", or "think before coding". Those requests may still deserve planning, but choosing this specific skill is the user's decision.
+
+## Workflow
+
+### 1. Gather Requirements
+
+Collect necessary information before planning.
+
+**All investigation MUST be completed in this step.** Do NOT defer investigation to implementation tasks. The plan should contain only implementable tasks — never "investigate", "research", or "explore" tasks. Any unknowns that block planning must be resolved here before proceeding.
+
+- Clarify the goal and scope of the task
+- **For existing codebases only**: Investigate existing code to identify affected files and understand existing patterns (skip for new projects with no existing code)
+- Identify dependencies and constraints
+- **Record external sources**: If the user references external sources (Notion pages, Figma designs, GitHub issues, Jira tickets, Slack threads, etc.), collect their URLs/identifiers and include them in the plan's Sources section
+
+**Clarification Process**:
+
+1. Identify all unclear points upfront and ask the user in a batch
+2. Proceed with plan creation
+3. If new blockers arise, batch remaining questions and ask again
+
+Topics that may require clarification:
+
+- Ambiguous requirements or specifications
+- Technology choices not explicitly stated
+- Scope boundaries that are unclear
+- Priority or ordering preferences
+
+### Temporary Files
+
+All temporary files created during investigation and planning (e.g., research notes, API response samples, code analysis outputs, exploratory scripts) MUST be saved under `.tasks/tmp/`. Do NOT save them in the project root or other locations.
+
+- Create `.tasks/tmp/` if it does not exist
+- Clean up `.tasks/tmp/` after the plan directory is created: move relevant files into the plan directory, delete the rest
+
+### 2. Analyze and Decompose
+
+Break down the task into implementable units:
+
+- Each task should be a coherent unit of functionality (see [Task Granularity](#task-granularity) for details)
+- Tasks should have clear inputs and outputs
+- Note which tasks depend on others (detailed dependency analysis in step 4)
+
+### 3. Create the Plan
+
+#### Task Categories
+
+Assign a category to each task. Categories determine the task ID prefix:
+
+| Category        | Prefix | Target Tasks                                       |
+| --------------- | ------ | -------------------------------------------------- |
+| `backend`       | B      | APIs, database, business logic, server-side code   |
+| `frontend`      | F      | UI components, client-side logic, styling          |
+| `documentation` | D      | README, user guides, tutorials, changelog          |
+| `other`         | X      | Tasks that do not fit into the above categories    |
+
+Task prefixes are numbered per category: B1, B2, B3... / F1, F2, F3... / D1, D2, D3... / X1, X2, X3...
+
+#### Task ID (UUID)
+
+Each task requires a unique identifier in UUIDv4 format.
+
+**Generation**: Use any UUID generator (e.g., `uuidgen` command, online generator, or programming language library).
+
+**Format**: `xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx` (e.g., `550e8400-e29b-41d4-a716-446655440000`)
+
+#### Plan Template
+
+Generate a plan with the following structure. See [references/plan.md](references/plan.md) for a complete example.
+
+````markdown
+# Implementation Plan: {Title}
+
+## Overview
+
+Brief description of what this plan accomplishes.
+
+## Goal
+
+Clear statement of the end state after implementation.
+
+## Scope
+
+- What is included
+- What is explicitly excluded
+
+## Prerequisites
+
+- Required knowledge or context
+- Dependencies that must be in place
+
+## Sources
+
+External references provided as input for this plan. Include URLs, document titles, and a brief note on what each source covers.
+
+| Source | URL / Identifier | Description |
+|--------|-----------------|-------------|
+| {Source name} | {URL or identifier} | {What this source covers} |
+
+> Omit this section if no external sources were provided.
+
+## Design
+
+Describe the technical design before listing tasks.
+Include:
+
+- Architecture and component structure
+- Data flow and key interactions
+- API contracts or interfaces
+- Key algorithms or business logic
+
+**UI/UX Design**: For tasks involving user interfaces, include the following design considerations:
+
+- Design system (typography, colors, spacing, component library)
+- User flows and wireframes
+- Interaction patterns and micro-interactions
+- Accessibility specifications (WCAG 2.1 AA/AAA)
+- Design tokens for implementation
+
+Use Mermaid diagrams to visualize complex flows or relationships (see [Diagrams](#diagrams) for examples).
+
+## Decisions
+
+Clarifications and decisions made during planning. This section preserves context that would otherwise be lost when implementation starts in a new session.
+
+| Topic | Decision | Rationale |
+|-------|----------|-----------|
+| Token storage | Access token in memory, refresh token in httpOnly cookie | Balances security and usability |
+| Rate limiting | 5 attempts per minute for login | Prevent brute force attacks |
+
+## Tasks
+
+### {Prefix}{N}: {Task Title}
+
+- **ID**: `{uuid}`
+- **Category**: `{category}`
+- **File(s)**: `src/models/user` (or specific path if modifying existing files)
+
+#### Description
+
+What to implement (1-2 paragraphs explaining the purpose and context)
+
+#### Constraints
+
+Rules and invariants the implementation must satisfy, regardless of implementation approach. Constraints are verifiable properties of the solution — they define *what must hold*, not *how to build it*.
+
+- Security requirements (e.g., "passwords must never be stored in plain text")
+- Performance requirements (e.g., "response time must be under 200ms")
+- Design invariants (e.g., "API must be idempotent")
+- Integration rules (e.g., "must use existing database connection pool", "must follow existing error response format")
+- Behavioral rules (e.g., "must handle concurrent access safely")
+
+#### Details
+
+Specific implementation steps, code patterns, and technical decisions that guide the implementer. This section tells the implementer *how* to build it.
+
+- Concrete file paths, function/class names, data structures
+- Step-by-step implementation instructions
+- Code examples, API contracts, mockups
+- Library/framework-specific usage
+- Edge cases and how to handle them
+
+#### Acceptance Criteria
+
+- [ ] Criterion 1
+- [ ] Criterion 2
+- [ ] Criterion 3
+
+## Verification
+
+How to verify the entire implementation is complete and correct.
+
+Include:
+
+- **Automated tests**: Commands to run (e.g., `pnpm test`, `pytest`)
+- **Manual testing steps**: Step-by-step verification procedure
+- **Demo scenario**: End-to-end user flow to demonstrate
+
+Example:
+1. Run `pnpm test` - all tests pass
+2. Manual test: Register → Login → Access protected route → Logout
+3. Verify error cases: Invalid credentials show error message
+
+````
+
+### 4. Analyze Dependencies
+
+After creating the plan, analyze the dependency graph to populate `dependsOn` for each task in `plan.json`.
+
+#### Dependency Analysis Algorithm
+
+**Step 1: Build Dependency Graph**
+
+For each task, identify:
+- Direct dependencies (tasks that must complete before this task can start)
+- Dependents (tasks that depend on this task)
+
+**Step 2: Validate No Circular Dependencies**
+
+Ensure the dependency graph has no cycles:
+
+1. Find all tasks with no dependencies → Wave 0
+2. Mark Wave 0 tasks as "scheduled"
+3. For remaining unscheduled tasks:
+   - If ALL dependencies are scheduled → add to next wave
+4. Repeat step 3 until all tasks are scheduled
+5. If any tasks remain unscheduled, there is a circular dependency → **error**
+
+**Step 3: Record Dependencies in plan.json**
+
+For each task, record its direct dependencies in the `dependsOn` array using task UUIDs.
+
+**Example**:
+
+Given dependencies:
+
+```
+B1 → B2 → B3
+B2 → F1
+```
+
+Result in `plan.json`:
+
+```json
+{
+  "tasks": [
+    { "id": "b1-uuid", "title": "B1: Create Model", "status": "pending", "dependsOn": [] },
+    { "id": "b2-uuid", "title": "B2: Create Service", "status": "pending", "dependsOn": ["b1-uuid"] },
+    { "id": "b3-uuid", "title": "B3: Create API", "status": "pending", "dependsOn": ["b2-uuid"] },
+    { "id": "f1-uuid", "title": "F1: Create Form", "status": "pending", "dependsOn": ["b2-uuid"] }
+  ]
+}
+```
+
+**Note**: The `status` field tracks task progress: `"pending"` (not started), `"in_progress"` (currently being implemented), `"done"` (passes all acceptance criteria). See [references/plan-json-schema.md](references/plan-json-schema.md) for full schema.
+
+### 5. Save the Plan
+
+Save the plan to `.tasks/` directory:
+
+- **Directory**: `.tasks/{YYYY-MM-DD}-{nn}-{slug}/` (create if not exists)
+  - Example: `.tasks/2026-01-15-00-user-authentication/`
+  - `{YYYY-MM-DD}`: Date prefix for chronological ordering
+  - `{nn}`: Two-digit sequence number starting from `00` (use 3+ digits if needed: `100`, `101`, ...)
+  - `{slug}`: Kebab-case slug derived from the plan title
+  - **Sequence number assignment**: List existing directories matching `.tasks/{YYYY-MM-DD}-*`, find the highest sequence number, and increment by 1
+
+#### Plan Document (`plan.md`)
+
+- **Filename**: `plan.md`
+- **Content**: The complete plan created in step 3
+- **Language**: ALWAYS English (no exceptions)
+  - plan.md is consumed by AI agents, not humans; English maximizes token efficiency
+  - This rule overrides any repository-level language settings
+
+#### Progress Tracking (`plan.json`)
+
+Save a JSON file alongside the plan for tracking task progress:
+
+- **Filename**: `plan.json`
+- **Purpose**: Machine-readable progress tracking for agents and tools
+- **Schema**: See [references/plan-json-schema.md](references/plan-json-schema.md) for the schema definition
+
+### 6. Plan Review
+
+After saving the plan, perform review to ensure quality before implementation.
+
+#### Review Criteria
+
+External review evaluates the plan against these criteria:
+
+| Criterion | Description |
+|-----------|-------------|
+| **Completeness** | All requirements are covered by tasks |
+| **Clarity** | Tasks are unambiguous and have sufficient detail |
+| **Dependencies** | Dependency graph is correct and has no cycles |
+| **Granularity** | Tasks are coherent functional units, not over-fragmented. Implementation and tests are in the same task |
+| **Acceptance Criteria** | Each task has verifiable acceptance criteria |
+| **Scope** | Tasks stay within defined scope boundaries |
+| **Risks** | Potential risks or blockers are identified |
+
+#### Review Process
+
+1. **Launch review subagent** (external quality check)
+   - Request review of the plan document (`plan.md`)
+   - Keep the agent ID in session memory for potential re-review
+
+2. **Process review findings**
+   - Identify all issues and suggestions from subagent response
+
+3. **If issues exist**:
+   - Fix all identified issues in `plan.md` and `plan.json`
+   - Resume the same subagent using the stored agent ID
+   - Repeat until external review passes
+
+4. **If no issues**:
+   - External review passed
+   - Plan is ready for implementation
+
+### 7. Configure Workflow Options
+
+After the plan passes review, ask the user to configure workflow options and save their choices to `plan.json`.
+
+This question phase happens **before** presenting the final plan summary. The summary in step 8 must reflect the user's confirmed workflow-option selections.
+
+#### 7.1 Commit Policy (`commitPolicy`)
+
+Determine the recommended value based on task scale:
+
+- If tasks are large (complex multi-file changes, estimated hours of work) → recommend `per-task`
+- If tasks are small (localized changes, estimated minutes of work) → recommend `end`
+
+Present the recommendation with a brief rationale and let the user choose:
+
+| Value | Behavior |
+|-------|----------|
+| `per-task` | Commit after each task completes (safe rollback points, good for large tasks) |
+| `end` | Commit once after all tasks complete (clean for small tasks, allows batch review before commit) |
+| `none` | No automatic commits (user handles all commits manually) |
+
+Only recommend `per-task` or `end` based on task scale. `none` is not recommended but is available if the user explicitly wants full manual control.
+
+#### 7.2 Agent Docs Update Policy (`updateAgentDocs`)
+
+Ask the user to choose how agent instruction files (AGENTS.md / CLAUDE.md) should be updated after implementation. Recommend `suggest`:
+
+| Value | Behavior |
+|-------|----------|
+| `auto` | Automatically update agent instruction files with learnings |
+| `suggest` | Write suggested updates to `.tasks/{dir}/agent-docs-suggestions.md` without modifying agent instruction files (recommended) |
+
+#### 7.3 Confirm and Save to plan.json
+
+**The user must explicitly confirm their selections before proceeding.** Do NOT interpret a non-selection response (e.g., a question about the plan, a request for clarification) as acceptance of defaults. If the user responds with something other than a selection:
+
+1. Answer the question or address the request
+2. Re-present the workflow options and ask again
+
+Only proceed when the user has made an explicit choice for each option, or explicitly says to use defaults (e.g., "defaults are fine", "go with the recommendations").
+
+After confirmation, update `plan.json` with the chosen values:
+
+```json
+{
+  "commitPolicy": "<user's choice>",
+  "updateAgentDocs": "<user's choice>"
+}
+```
+
+### 8. Present Plan Summary
+
+After the workflow options are confirmed and saved, present a concise summary to the user **in the user's language**.
+
+The summary should enable the user to grasp the entire plan without reading `plan.md`.
+
+**Output Format**: Use the following Markdown template every time. Keep the heading labels and section order fixed. Fill in the placeholders with the actual plan content.
+
+````markdown
+## Plan Summary
+
+**Plan Path**
+
+[{.tasks/YYYY-MM-DD-nn-slug/plan.md}]({absolute path to plan.md})
+
+**Workflow Configuration**
+
+- `commitPolicy`: `{selected value}`
+- `updateAgentDocs`: `{selected value}`
+
+**Goal**
+
+{1-2 sentences describing what the plan accomplishes}
+
+**Scope**
+
+- Included: {what is included}
+- Excluded: {what is excluded}
+
+**Design Overview**
+
+{short explanation of the key architectural decisions and technical approach}
+
+**Tasks**
+
+1. `{Task ID}` **{Task Title}**
+   {translated task Description from plan.md, shown faithfully without summarizing}
+
+2. `{Task ID}` **{Task Title}**
+   {translated task Description from plan.md, shown faithfully without summarizing}
+
+{repeat for all tasks in the plan}
+
+**Risks / Open Items**
+
+- {risk or open item}
+- {risk or open item}
+````
+
+Requirements for filling this template:
+
+- **Plan Path**: Show `plan.md` at the top of the summary as a clickable Markdown link. Use the relative path as the link label and the absolute file path as the link target
+- **Workflow Configuration**: Show the user's confirmed `commitPolicy` and `updateAgentDocs` selections exactly as saved in `plan.json`
+- **Goal**: What the plan accomplishes (1-2 sentences)
+- **Scope**: State both included and excluded scope
+- **Design Overview**: Summarize key architectural decisions and technical approach
+- **Tasks**: Include every task with its ID, title, and the corresponding `Description` content from `plan.md`
+  - Translate the `Description` into the user's language
+  - Do NOT summarize, compress, or add interpretation beyond minor wording adjustments needed for natural translation
+  - Do NOT mix in content from `Constraints`, `Details`, or `Acceptance Criteria`
+- **Risks / Open Items**: List any notable risks identified during planning; if none, write `- None`
+
+**Guidelines**:
+- Do NOT reproduce the full plan — summarize the non-task sections at a level where the user can make a go/no-go decision, but show each task `Description` faithfully
+- Use the user's language, not the plan document's language
+- Keep technical accuracy — do not oversimplify to the point of losing important nuance
+- Omit execution-phase details (dependency order, implementation steps) — focus on *what* and *why*, not *how* or *when*
+- Treat task `Description` as the source of truth for task body text in the summary
+- Do NOT use Mermaid diagrams — they cannot be rendered in chat. Use ASCII art instead when a visual representation aids understanding
+- Do NOT invent optional sections or reorder the template unless the user explicitly requests a different format
+
+## Guidelines
+
+### Diagrams
+
+Actively use diagrams to make plans clearer and easier to understand. All diagrams MUST be written in Mermaid format.
+
+**When to use diagrams**:
+- System architecture or component relationships (use flowchart or C4 diagram)
+- Data flow or process sequences (use sequence diagram)
+- State transitions (use state diagram)
+- Entity relationships (use ER diagram)
+
+**Example - Sequence Diagram**:
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API
+    participant AuthService
+    participant DB
+
+    Client->>API: POST /auth/login
+    API->>AuthService: login(email, password)
+    AuthService->>DB: findUser(email)
+    DB-->>AuthService: user
+    AuthService-->>API: {accessToken, refreshToken}
+    API-->>Client: 200 OK with tokens
+```
+
+### Task Granularity
+
+Each task should represent a coherent unit of functionality:
+
+- Represent a coherent unit of functionality that can be independently verified
+- Group closely related changes together within the same build unit (e.g., model + service layer + route handler in a single application)
+- **Split across build unit boundaries** — when changes span different build units (e.g., separate packages in a monorepo such as BFF, backend service, and frontend), create separate tasks for each unit. Different build units have independent build, test, and deploy processes, making them natural task boundaries.
+- Split only when a task has a genuinely different concern or can be tested in isolation
+- **Implementation and tests are always a single task** — never separate test code into its own task. Each task includes writing the production code AND its corresponding tests. Acceptance criteria should reflect both implementation correctness and test coverage.
+
+Do NOT split tasks based on file count or estimated time alone. Over-fragmentation (e.g., separating a model from its directly associated service, or separating tests from their implementation) makes implementation harder, not easier.
+
+### Detail Level
+
+**CRITICAL**: The plan must contain ALL information needed for implementation. The implementer cannot know what is not written in the plan, even if you (the plan author) know it. Write as if the implementer has no context beyond what is in the plan document.
+
+Include enough detail that another engineer can implement without asking questions:
+
+- Specific file paths
+- Function/class names to create or modify
+- Data structures and types
+- Error handling requirements
+- Integration points
+- Design decisions and their rationale
+- Edge cases and how to handle them
+- Any assumptions made during planning
+
+### Constraints vs. Details
+
+Each task has both a **Constraints** section and a **Details** section. These serve different audiences:
+
+- **Constraints** are read by both the implementer and the reviewer
+- **Details** are read only by the implementer (the reviewer does NOT see them)
+
+This separation prevents the reviewer from being biased by implementation specifics, allowing them to evaluate the code from a fresh perspective while still understanding what rules the code must satisfy.
+
+**Classification guide**:
+
+| Goes in Constraints | Goes in Details |
+|---|---|
+| Rules the code must satisfy regardless of approach | Specific steps to build the solution |
+| Verifiable properties of the solution | Implementation-specific decisions |
+| "Passwords must never be stored in plain text" | "Use bcrypt with cost factor 12" |
+| "API must be idempotent" | "Store request IDs in Redis for dedup" |
+| "Must use existing DB connection pool" | "Call `getConnection()` from `src/db/pool.ts`" |
+| "Must handle concurrent access safely" | "Use optimistic locking with a `version` column" |
+
+**When in doubt**, put it in Constraints. An over-informed reviewer is better than an under-informed one — the risk of bias from a constraint-level statement is much lower than from detailed implementation instructions.
+
+### What to Avoid
+
+- **Do not create investigation or research tasks** — all investigation (code analysis, API exploration, pattern discovery) must be completed during the planning phase. The resulting plan should contain only implementable tasks with concrete deliverables.
+- Do not include design decisions that need discussion (flag these as blockers)
+- Do not include tasks outside the stated scope
+- Do not create circular dependencies between tasks
+
+## References
+
+- [references/plan.md](references/plan.md) - Complete example plan
+- [references/plan.json](references/plan.json) - Corresponding progress tracking file
+- [references/plan-json-schema.md](references/plan-json-schema.md) - JSON schema definition

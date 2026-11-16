@@ -1,0 +1,3 @@
+[21:07:06] index loaded: 43554 skills; done so far: 43554
+[21:07:06] details to fetch: 0
+[21:07:07] qoder harvest: 43554 ok, 0 failed of 43554 indexed

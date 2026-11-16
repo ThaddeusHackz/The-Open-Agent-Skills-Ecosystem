@@ -1,0 +1,260 @@
+# Ticker Read
+
+Use this reference for company analysis, earnings interpretation, investor
+focus, an unusual move, a catalyst check, or a comparison of what changed.
+Standalone price and security-identity lookups use [data-skills.md](data-skills.md).
+Treat these as first-tier ticker-read sources: check
+the matching official Platform Data method before generic search, then add Data
+Skills or primary-source verification where the method's contract requires it.
+
+First-tier does not mean exhaustive. Select the smallest sufficient combination
+for the user's question, time horizon, ticker coverage, and requested depth. Do
+not execute every source by default, and do not turn a direct analysis into a
+feed, Automation, or Playbook unless the user asks for a durable artifact.
+
+For "today", "just now", or "the selloff", read the time in the user's own
+timezone (from memory or context). For a named market or asset, use its
+session that is trading or last closed; otherwise infer the market from the
+assets they follow and their local time. When two readings fit, answer the
+likelier one and name it in half a sentence instead of answering one market
+and asking.
+
+## Source Router
+
+The five official methods form two lanes. Fetch the selected method's current
+instructions from Skillhub before first use; reuse applicable instructions
+already read in this session. Refresh on an environment change or contract
+mismatch, since contracts and public paths can change.
+
+Use `alva/company-anomaly-read` as the first direct-read check for intraday and hourly-scale market tracking.
+Its feed checks roughly every 15 minutes during US market hours, so it is the
+primary ticker-state source for hour-scale tracking, not a live quote.
+
+### Direct-read lane
+
+| Official Skillhub id | Choose it for | Coverage and boundary |
+| --- | --- | --- |
+| `alva/company-anomaly-read` | Primary intraday/hourly-scale tracking: whether a covered US ticker is anomalous now, its current signal, the latest confirmed attribution in the active episode, or anomaly history. | Public read-only coverage is a curated roughly 3,000-symbol US universe with roughly 15-minute checks during US market hours. A quiet state does not prove that price was flat or that no news exists. |
+| `alva/what-investors-are-looking-for` | An explicit raw WILF-card request, or compatibility fallback when Markets Narrative is unavailable. | Markets Narrative is the default reader for ordinary investor-focus questions. Per-ticker WILF cards cover roughly 2,960 symbols; the feed contains generated card content, not prices, charts, fundamentals, or raw source documents. During the catalog rename rollout, the active profile may still expose it as `alva/wilf`. |
+| `alva/query-breaking-news-feed` | Current macro/cross-market event discovery that may explain market, sector, or highly watched-company behavior. | It is not a company-by-company news feed. Missing coverage means the feed did not surface a matching event, not that no event exists. |
+
+### Build-on-demand lane
+
+| Official Skillhub id | Choose it for | Coverage and boundary |
+| --- | --- | --- |
+| `alva/company-data-aggregate` | Build one provenance-tagged company record set containing price/return/z values, peers, market metrics, news, X, insider/congress activity, earnings, revisions, and analyst targets. | Aggregation computes values but makes no anomaly judgment. US is fully supported; non-US uses daily price and skips or degrades US-only sources. The run writes to a caller-selected ALFS path. |
+| `alva/company-move-attribution` | Explain a move already identified as anomalous using a company record set: decompose market, sector, and idiosyncratic contribution, then identify a dated driver. | Attribution assumes an already-identified anomalous move and records produced by `alva/company-data-aggregate`. It performs no detection and no web search inside attribution. |
+
+Use the Direct-read lane first when its coverage matches. Use the Build-on-demand
+lane for an off-list, non-US, user-defined, or otherwise uncovered move, or when
+the user explicitly needs a custom assembled record set. A build fallback stays
+inside the Financial Analysis answer route; it does not silently become an
+Automation or Playbook.
+
+## Loading A Method
+
+These source modules are official and known, but publication is profile-specific
+and may lag the source repository:
+
+Reuse applicable metadata and instructions already read in this session;
+otherwise follow these steps:
+
+1. Use the documented commands below; consult the relevant help if syntax is
+   uncertain or a call reports a contract mismatch.
+2. Read its instructions directly with
+   `alva skillhub file <official-id> SKILL.md`; a successful read verifies the
+   method. Run `alva skillhub get <official-id>` only when that read fails or
+   you need the file listing for bundled files.
+3. If the exact id is unavailable, run
+   `alva skillhub list --username alva` in the active profile and accept only one
+   obvious rollout alias. For WILF, `alva/wilf` is the known legacy id for
+   `alva/what-investors-are-looking-for`; verify that alias with `get` and do not
+   infer other aliases.
+4. For an alias or a method without `SKILL.md`, read the listed instruction
+   file with `alva skillhub file <resolved-id> <file>`. Do not guess a stale
+   local path or bulk-download unrelated files. Pull bundled scripts only when the selected
+   build method requires them.
+5. Follow the fresh method contract for paths, fields, coverage, and execution.
+
+This proactive source route is Financial Analysis source selection, not the
+generic Skillhub Blueprint route. Using one of these methods for an answer does
+not imply Playbook Creation or `--skill-id`; those apply only if the user also
+asks to build a playbook.
+
+### Availability Gate
+
+Local source files are not proof that a method is published in the active
+profile. If neither the exact id nor a documented rollout alias exists, do not
+claim the method was used and do not block the whole answer:
+
+- Continue with the remaining available Platform Data sources plus ordinary
+  Data Skills and primary-source search.
+- For Company Anomaly reads, do not bypass an unavailable Skillhub method by
+  reconstructing its ALFS paths or field contract from memory or a stale bundled
+  copy. Report the method gap and continue with evidence that is actually available.
+- If either build-on-demand method is unavailable, do not reconstruct its
+  script from memory. Explain that custom aggregation/attribution is unavailable
+  in the active profile, answer with the evidence that can be sourced, and mark
+  the attribution gap.
+
+Method availability is rollout state, not company coverage. Keep a catalog 404
+separate from a published method reporting that a particular ticker is not
+covered.
+
+### Markets company context
+
+Use the signatures below; consult command help if syntax is uncertain or the
+call reports a contract mismatch.
+
+- Current Company Narrative, Narrative history, or change log:
+  `alva markets narrative --ticker <TICKER>`
+- Latest completed earnings (default selector):
+  `alva markets earnings --ticker <TICKER> --event latest-completed`
+- Next confirmed earnings:
+  `alva markets earnings --ticker <TICKER> --event next-confirmed`
+- Explicit period:
+  `alva markets earnings --ticker <TICKER> --fiscal-year <YEAR> --fiscal-quarter <Q1|Q2|Q3|Q4>`
+  Supply both fiscal flags; do not combine them with `--event`.
+
+Use Narrative as the default reader for current investor focus, debate,
+competitive context, what could move the stock, four-quarter focus, Street
+positioning, and narrative changes. Do not read WILF in parallel for the same
+request; use it only when explicitly requested or when Narrative is unavailable.
+
+Add latest completed Earnings for a broad company assessment or thesis, an
+explicit earnings/call question, or when selected evidence makes a fiscal event
+material. Price-only and fundamentals-only asks do not call Markets for enrichment.
+
+Treat Pre as a dated expectation baseline, Release as the official source for
+reported facts, Transcript as management statements, and Post as Alva analysis.
+Preserve valid stages when another is unavailable; never substitute a different
+event for the requested one.
+
+Markets returns the current backend view, not historical point-in-time truth.
+If the command is unavailable, continue with available sources; do not construct
+GraphQL, ALFS paths, owners, or environment mappings.
+
+## Intent Routing
+
+### Intraday and hourly-scale tracking
+
+1. Use Data Skills for the live price, the move basis, and the requested
+   one-hour or intraday window.
+2. Load and follow `alva/company-anomaly-read` first.
+3. Use its current-state or bounded-history workflow for the requested horizon,
+   including its rules for keeping current and prior attributions distinct.
+4. Add Breaking News only when a current macro/sector event may explain the
+   move. Add Markets Narrative only when investor context helps interpret it.
+
+A quiet state does not prove that price was flat. It means no anomaly rule
+crossed in that run; report the live move from Data Skills separately.
+
+### Broad ticker read
+
+For every broad ticker read, check the Direct-read lane before generic search:
+
+1. Resolve the canonical ticker and requested horizon.
+2. For intraday tracking or an unusual move, check Company Anomaly exact-ticker
+   coverage and current state first. When covered, add the anomaly state and
+   freshness; when uncovered, continue without treating the missing feed as a
+   company signal. Long-term fundamental questions need no anomaly check unless
+   it bears on the requested judgment.
+3. Read Markets Narrative when the question needs current investor priorities,
+   debate, competitive context, or recent changes. Report `asOf` and
+   `generatedAtMs`.
+4. Query Breaking News when the user asks about recent catalysts, today's
+   context, or a move that may be market- or sector-driven.
+5. Use Data Skills for live price, returns, fundamentals, valuation, estimates,
+   and peer facts, then apply the normal Complex Ask Router.
+
+Data Skills remain the source for live price, fundamentals, valuation, and
+other ordinary financial facts. Platform Data contributes processed company
+context; it does not replace the financial evidence needed by the answer.
+
+### Trade Setup follow-up
+
+After answering a named single-instrument ticker read, end with one short Trade
+Setup automation follow-up when the answer identifies a trade thesis, entry or
+exit area, confirmation condition, catalyst watch, risk, or invalidation
+condition. This is mandatory for setup-like asks such as "can I go long/short",
+"key levels", "catalysts", "stop/invalidated if", "breakout/breakdown", or
+"what would confirm this trade". Do not omit it merely because the normal
+answer already contains the levels, risk, or conclusion.
+
+The follow-up must be the final sentence or final short paragraph of the answer.
+It should ask whether the user wants to turn the specific conditions just
+answered into a Trade Setup automation.
+
+Use this only when the answer naturally identifies something worth monitoring
+over time: a thesis, entry/exit area, confirmation condition, breakdown risk,
+catalyst watch, or user-facing decision condition. Do not suggest it for simple
+fact lookups, broad multi-ticker discovery, or portfolio monitoring.
+
+Ask after the normal answer, in the user's language, and keep it low-pressure.
+For a setup-like ask, the answer is incomplete without this final invitation.
+Example: "Want me to turn these key levels, catalysts, and invalidation
+conditions into a Trade Setup automation so you can be notified if the setup
+confirms or breaks?"
+
+### Why did it move?
+
+1. Establish the ticker, move, time window, and price basis with Data Skills.
+2. For a covered ticker, load and follow `alva/company-anomaly-read` for
+   current state and attribution instead of reproducing its ALFS contract here.
+3. For an off-list, non-US, user-defined, or otherwise uncovered move, use
+   `alva/company-data-aggregate`, confirm the supplied move is the one being
+   explained, then run `alva/company-move-attribution` over the kept records. If
+   either method is unavailable in the active profile, follow the Availability
+   Gate instead of fabricating the missing workflow.
+4. Use `alva/query-breaking-news-feed` as a separate current macro/sector
+   discovery check when relevant. Do not imply that its events were inputs to
+   the no-web attribution run unless they are actually present in the supplied
+   records.
+5. Label the decomposition and driver narrative as Alva analysis, not
+   established causality. If there is no dated matching event, say so and lower
+   confidence.
+
+### What are investors watching?
+
+Use Markets Narrative for current focus and its history only when the user asks
+how focus changed. Report `asOf` and `generatedAtMs`. If the compatibility
+fallback reaches WILF, report its `date` / `as_of` and `gaps`; never generate
+missing WILF coverage for a read-only request.
+
+When the question also asks what may matter today, combine the Narrative with
+`alva/query-breaking-news-feed` for current macro/cross-market event discovery.
+Verify material event claims against source entries marked
+`supports_event: true`; `sourceConfidence` and `primarySourceUrl` alone are not
+verification.
+
+### Breaking events and catalysts
+
+Use `alva/query-breaking-news-feed` for recent macro, rates, currency,
+commodity, geopolitical, crypto, broad-risk, major-industry, and highly watched
+company events. Check the audit freshness; the method defines a latest audit as
+stale after 30 minutes.
+
+For a ticker or keyword miss, say the feed **did not surface a matching event**.
+Because it is not a company-by-company news feed, continue with ordinary
+company news or primary-source search when the question requires exhaustive
+company coverage.
+
+## Synthesis Gate
+
+Verify the selected layers and their timestamps before using them. In the
+answer, cite supporting sources and explain timing, coverage, and uncertainty
+where they affect the conclusion.
+
+| Layer | Preferred evidence | What to check |
+| --- | --- | --- |
+| Performance now | Data Skills | Price/return basis, as-of time, fundamentals or valuation periods. |
+| Investor focus | Markets Narrative; WILF only as compatibility fallback | Narrative `asOf` / `generatedAtMs`; on WILF fallback, weekly `date` / `as_of` and `gaps`. |
+| Anomaly state | Company Anomaly | Current timeline timestamp, active/quiet state, episode identity, and attribution timestamp. |
+| Current catalysts | Breaking News plus supporting sources | Observation/update time, whether a source supports the event, and coverage limits. |
+| Custom move explanation | Aggregate + Move Attribution | Records run time, supplied move basis, decomposition, dated evidence, and confidence. |
+
+Separate upstream facts, computed values, and model-generated analysis. A
+missing feed, source gap, quiet anomaly, or unsurfaced breaking event is a
+coverage statement, never a negative conclusion about the company. Synthesize
+the selected layers into one answer rather than returning five disconnected
+source summaries.

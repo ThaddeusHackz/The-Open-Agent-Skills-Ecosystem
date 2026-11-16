@@ -1,0 +1,244 @@
+[
+  {
+    "name": "convert_markdown_to_jira",
+    "prompt": "Convert this Markdown to Jira wiki format: **bold** text with [link](https://example.com) and `code`",
+    "assertions": [
+      {
+        "type": "content",
+        "pattern": "\\*bold\\*"
+      },
+      {
+        "type": "content",
+        "pattern": "\\[link\\|https://example\\.com\\]"
+      },
+      {
+        "type": "content",
+        "pattern": "\\{\\{code\\}\\}"
+      },
+      {
+        "type": "must_not",
+        "pattern": "\\*\\*bold\\*\\*"
+      }
+    ],
+    "samples": {
+      "passing": "*bold* text with [link|https://example.com] and {{code}}",
+      "failing": [
+        "**bold** text with [link](https://example.com) and `code`"
+      ]
+    }
+  },
+  {
+    "name": "bug_report_with_table",
+    "prompt": "Write a Jira bug report description with a table of reproduction steps (Step, Action, Expected, Actual) for a file upload bug",
+    "assertions": [
+      {
+        "type": "content",
+        "pattern": "\\|\\|.*Step.*\\|\\|"
+      },
+      {
+        "type": "content",
+        "pattern": "h[1-3]\\."
+      },
+      {
+        "type": "must_not",
+        "pattern": "\\*\\*[^*[:space:]]"
+      }
+    ],
+    "samples": {
+      "passing": "h2. Steps to reproduce\n||Step||Action||Expected||Actual||\n|1|Upload a 20 MB file|Upload succeeds|HTTP 413|\n# Open the upload dialog\n# Select a 20 MB file\nh2. Environment\n* Browser\n** Chrome 129\n*** Version 129",
+      "failing": [
+        "## Steps to reproduce\n| **Step** | Action |"
+      ]
+    }
+  },
+  {
+    "name": "format_code_block_in_jira",
+    "prompt": "Show me how to include a Java stack trace in a Jira comment with proper formatting",
+    "assertions": [
+      {
+        "type": "content",
+        "pattern": "\\{code(:java)?\\}"
+      },
+      {
+        "type": "content",
+        "pattern": "^\\{code\\}$"
+      }
+    ],
+    "samples": {
+      "passing": "{code:java}\njava.lang.NullPointerException\n    at Foo.bar(Foo.java:12)\n{code}",
+      "failing": [
+        "```java\njava.lang.NullPointerException\n```"
+      ]
+    }
+  },
+  {
+    "name": "escape_literal_block_tag_mention",
+    "prompt": "Write a short Jira QA comment in wiki markup with one finding line stating that all commands are documented in {code} blocks with command and output together, plus one real code block containing: ls -l",
+    "assertions": [
+      {
+        "type": "content",
+        "pattern": "\\\\\\{code\\\\\\}"
+      },
+      {
+        "type": "must_not",
+        "pattern": "\\{code\\}.*[A-Za-z]"
+      }
+    ],
+    "samples": {
+      "passing": "(/) All commands are documented in \\{code\\} blocks with command and output together.\n{code}\nls -l\n{code}",
+      "failing": [
+        "(/) All commands are documented in {code} blocks with command and output together."
+      ]
+    }
+  },
+  {
+    "name": "pending_step_marker_in_review",
+    "prompt": "Write a short Jira QA review comment in wiki markup with two status lines. Use a status icon on each line: the GitLab service update is done, and the runner manager update is still pending until the service is verified.",
+    "assertions": [
+      {
+        "type": "content",
+        "pattern": "\\(/\\).*[Ss]ervice"
+      },
+      {
+        "type": "content",
+        "pattern": "\\(i\\).*[Pp]ending"
+      },
+      {
+        "type": "must_not",
+        "pattern": "^[*# ]*\\(-\\)"
+      },
+      {
+        "type": "must_not",
+        "pattern": "\\(x\\).*[Pp]ending"
+      }
+    ],
+    "samples": {
+      "passing": "(/) GitLab service update done\n(i) Runner manager update pending until the service is verified\n\nI used (i) for the pending step, not (-) or (x).",
+      "failing": [
+        "(/) GitLab service update done\n(x) Runner manager update pending",
+        "(/) GitLab service update done\n(-) Runner manager update pending"
+      ]
+    }
+  },
+  {
+    "name": "heading_and_numbered_steps",
+    "prompt": "Write a Jira description in wiki markup with a level-2 heading 'Steps' followed by a numbered list of three deployment steps.",
+    "assertions": [
+      {
+        "type": "content",
+        "pattern": "^h2\\. Steps"
+      },
+      {
+        "type": "content",
+        "pattern": "^# \\S"
+      },
+      {
+        "type": "must_not",
+        "pattern": "^1\\. "
+      }
+    ],
+    "samples": {
+      "passing": "h2. Steps\n# Build the image\n## Run the unit tests\n# Push the image\n# Roll out the release",
+      "failing": [
+        "## Steps\n1. Build the image\n2. Push the image\n3. Roll out the release",
+        "h2.Steps\n1. Build the image"
+      ]
+    }
+  },
+  {
+    "name": "mention_user_and_link_issue",
+    "prompt": "Write a one-line Jira comment in wiki markup that mentions the user john.doe and refers to issue PROJ-456.",
+    "assertions": [
+      {
+        "type": "content",
+        "pattern": "\\[~john\\.doe\\]"
+      },
+      {
+        "type": "content",
+        "pattern": "PROJ-456"
+      },
+      {
+        "type": "must_not",
+        "pattern": "@john\\.doe"
+      }
+    ],
+    "samples": {
+      "passing": "[~john.doe] please check [PROJ-456] before the release.",
+      "failing": [
+        "@john.doe please check PROJ-456 before the release."
+      ]
+    }
+  },
+  {
+    "name": "quote_block_for_customer_statement",
+    "prompt": "Write a Jira comment in wiki markup that quotes the customer statement 'The export fails after 30 seconds' as a block quote, followed by one sentence of analysis.",
+    "assertions": [
+      {
+        "type": "content",
+        "pattern": "^(\\{quote\\}$|bq\\. )"
+      },
+      {
+        "type": "content",
+        "pattern": "export fails"
+      },
+      {
+        "type": "must_not",
+        "pattern": "^> "
+      }
+    ],
+    "samples": {
+      "passing": "{quote}\nThe export fails after 30 seconds\n{quote}\nThe request hits the proxy timeout.",
+      "failing": [
+        "> The export fails after 30 seconds\n\nThe request hits the proxy timeout."
+      ]
+    }
+  },
+  {
+    "name": "panel_with_title",
+    "prompt": "Write a Jira wiki markup panel titled 'Important Information' containing the sentence 'Maintenance starts at 18:00'.",
+    "assertions": [
+      {
+        "type": "content",
+        "pattern": "\\{panel:title=Important Information"
+      },
+      {
+        "type": "content",
+        "pattern": "^\\{panel\\}$"
+      },
+      {
+        "type": "must_not",
+        "pattern": "^> \\*\\*"
+      }
+    ],
+    "samples": {
+      "passing": "{panel:title=Important Information}\nMaintenance starts at 18:00\n{panel}",
+      "failing": [
+        "> **Important Information**\n> Maintenance starts at 18:00"
+      ]
+    }
+  },
+  {
+    "name": "colored_status_text",
+    "prompt": "Write a Jira wiki markup status line where the word FAILED is shown in red and the word PASSED in green.",
+    "assertions": [
+      {
+        "type": "content",
+        "pattern": "\\{color:(red|#[0-9A-Fa-f]{3,6})\\}\\*?FAILED\\*?\\{color\\}"
+      },
+      {
+        "type": "content",
+        "pattern": "\\{color:(green|#[0-9A-Fa-f]{3,6})\\}\\*?PASSED\\*?\\{color\\}"
+      },
+      {
+        "type": "must_not",
+        "pattern": "<span"
+      }
+    ],
+    "samples": {
+      "passing": "Build: {color:green}*PASSED*{color}, deploy: {color:red}FAILED{color}",
+      "failing": [
+        "Build: <span style=\"color:green\">PASSED</span>, deploy: <span style=\"color:red\">FAILED</span>"
+      ]
+    }
+  }
+]

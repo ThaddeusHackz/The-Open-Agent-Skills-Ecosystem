@@ -1,0 +1,65 @@
+[19:00:35] https://www.skills.sh/sitemap-skills-1.xml: 10000 locs
+[19:00:35] https://www.skills.sh/sitemap-skills-2.xml: 10000 locs
+[19:00:35] sitemap universe: 20000 classifiable, 0 unparsed
+[19:03:07] https://www.skills.sh/sitemap-skills-1.xml: 10000 locs
+[19:03:07] https://www.skills.sh/sitemap-skills-2.xml: 10000 locs
+[19:03:07] sitemap universe: 20000 classifiable, 0 unparsed
+[19:03:12] leaderboard through page 8: 1600 entries
+[19:03:16] leaderboard through page 16: 3200 entries
+[19:03:19] leaderboard through page 24: 4800 entries
+[19:03:29] leaderboard page 25 failed: GET failed after 4 tries: https://www.skills.sh/api/skills/all-time/25 :: HTTP Error 429: Too Many Requests
+[19:03:29] leaderboard through page 25: 4800 entries
+[19:03:29] leaderboard entries: 4800
+[19:03:29] union: +95 skills from leaderboard not in sitemaps
+[19:03:29] github sources: 2303 repos / 20018 skills; site sources: 77 skills
+[19:03:29] repos to fetch: 2303 (already done: 0)
+[19:03:57] skills.sh repos: 200/2303 done
+[19:05:02] skills.sh repos: 400/2303 done
+[19:06:20] skills.sh repos: 600/2303 done
+[19:07:29] skills.sh repos: 800/2303 done
+[19:09:12] skills.sh repos: 1000/2303 done
+[19:10:19] skills.sh repos: 1200/2303 done
+[19:11:17] skills.sh repos: 1400/2303 done
+[19:12:00] skills.sh repos: 1600/2303 done
+[19:12:35] skills.sh repos: 1800/2303 done
+[19:13:21] skills.sh repos: 2000/2303 done
+[19:14:24] skills.sh repos: 2200/2303 done
+[19:19:44] clone fallback failed gmh5225/awesome-game-security: Command '['git', 'clone', '--depth', '1', '--quiet', 'https://github.com/gmh5225/awesome-game-security.git', '/tmp/repo-yqu0forv/x']' timed out after 180 seconds
+[19:19:44] github done: 2303 repos, 50 failed, 18471 skills extracted, 1547 unresolved
+[19:19:44] site skills to scrape: 77
+[19:19:48] site done: 29/77 scraped
+[19:19:48] skills.sh harvest complete
+[20:36:52] https://www.skills.sh/sitemap-skills-1.xml: 10000 locs
+[20:36:52] https://www.skills.sh/sitemap-skills-2.xml: 10000 locs
+[20:36:52] sitemap universe: 20000 classifiable, 0 unparsed
+[20:36:52] leaderboard entries: 4800
+[20:36:52] union: +95 skills from leaderboard not in sitemaps
+[20:36:52] github sources: 2305 repos / 20018 skills; site sources: 77 skills
+[20:36:52] repos to fetch: 52 (already done: 2303)
+[20:42:24] clone fallback failed gmh5225/awesome-game-security: Command '['git', 'clone', '--depth', '1', '--quiet', 'https://github.com/gmh5225/awesome-game-security.git', '/tmp/repo-139k5mpk/x']' timed out after 180 seconds
+[20:42:24] github done: 2305 repos, 50 failed, 18473 skills extracted, 1547 unresolved
+[20:42:24] site skills to scrape: 77
+[20:42:27] site done: 65/77 scraped
+[20:42:27] skills.sh harvest complete
+[20:55:15] https://www.skills.sh/sitemap-skills-1.xml: 10000 locs
+[20:55:15] https://www.skills.sh/sitemap-skills-2.xml: 10000 locs
+[20:55:15] sitemap universe: 20000 classifiable, 0 unparsed
+[20:55:15] leaderboard entries: 4800
+[20:55:15] union: +95 skills from leaderboard not in sitemaps
+[20:55:15] github sources: 2306 repos / 20018 skills; site sources: 77 skills
+[20:55:15] repos to fetch: 1 (already done: 2305)
+[20:55:16] github done: 2306 repos, 50 failed, 18474 skills extracted, 1547 unresolved
+[20:55:16] site skills to scrape: 12
+[20:55:20] site done: 65/77 scraped
+[20:55:20] skills.sh harvest complete
+[21:07:01] https://www.skills.sh/sitemap-skills-1.xml: 10000 locs
+[21:07:02] https://www.skills.sh/sitemap-skills-2.xml: 10000 locs
+[21:07:02] sitemap universe: 20000 classifiable, 0 unparsed
+[21:07:02] leaderboard entries: 4800
+[21:07:02] union: +95 skills from leaderboard not in sitemaps
+[21:07:02] github sources: 2306 repos / 20018 skills; site sources: 77 skills
+[21:07:02] repos to fetch: 0 (already done: 2306)
+[21:07:02] github done: 2306 repos, 50 failed, 18474 skills extracted, 1547 unresolved
+[21:07:02] site skills to scrape: 11
+[21:07:05] site done: 76/77 scraped
+[21:07:05] skills.sh harvest complete

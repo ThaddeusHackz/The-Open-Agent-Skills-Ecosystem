@@ -1,0 +1,343 @@
+# Gang CLI（`gang`）
+
+**Pad 3.0 地址后缀（0.38.0+）：** owner 启用 `abcd` 部署器后，曲线、打新和铸币飞轮新币地址统一以 `abcd` 结尾（忽略校验和大小写）。CLI 会在最终元数据确定后自动计算 salt，`--grad`、`--vault`、`--promote` 发币也包含在内，`tokenIfNext` 显示确定的预测地址。请在启用前升级 CLI：启用后旧的直接发币调用会被拒绝。旧币地址和交易不变；启用前，新 CLI 仍走原有发币流程。
+
+用 Binance **Agentic Wallet** 操作 [gang.fun](https://gang.fun)。内盘买入/发币需要 SPACE ID `.ai` Agent ID。本 CLI 只组 calldata，签名走 `baw`，不持有私钥。
+
+**`gang create`：** 在 GangLaunchpad 上发 V3 币（`gang create --fair` 发打新）；不带 `--buy-tax` / `--sell-tax` 就是无税币。LaunchpadV2 / Soft / LaunchpadU / LaunchpadS **不再发新币**，存量币照常交易（`gang buy` / `gang sell`）。V3 新币在 GangLaunchpad 1.0 上 **15 BNB** 毕业；2.0 和 3.0 上由 creator 用 `--grad` 选 **6 / 9 / 12 / 15 BNB**（默认 9）。Soft 存量链上仍为 20 BNB 毕业。
+
+**一个动作一条命令（0.12.0+）：** `gang buy` / `sell` / `info` / `status` / `claim` / `mint` / `withdraw` / `release` 对所有币都能用：CLI 先读出这个币的类型，再执行 V3、打新或 V2 / Soft 的逻辑。`gang v3 …` / `gang fair …` 保留为别名。
+
+**铸币飞轮（0.18.0+）：** `gang create --fly` 开一场铸币飞轮（kind 3）：按份 mint，每个钱包有额度，邀请可以加额度；打满后按 mint 价开池，开池后还能继续 mint。统一命令会自动识别这类币（`kind: "fly"`），`gang fly …` 是别名。2026-10-30 起在 BSC 主网运行（V1 发射台 `0x631e66560F4FAE4e486B65349edE48189E48B029`）；0.21.0 起新币发在 V2 发射台 `0x281889ad915c1A95ffc4922235c6314b3Cbd8a5a`，0.30.0 起发在 GangLaunchpad 3.0（见下）。其他命令按代币自己的发射台走，V1、V2 的币照常可用（`gang info` 的 `padVersion`：1、2 或 3）。`--testnet` 走 BSC 测试网（V1 第 2 套，V2 `0x7069…E3d6`，3.0）。规则见 `skill/references/fly.md`。
+
+**V3 税收币和打新（0.9.0+）：** 走 GangLaunchpad，2026-10-27 起在 BSC 主网运行（1.0：内盘 `0x15CFD2dc8278Fb87a1783ef42111618E20874365`，GangRouter `0xE040445690Aa56C8b68B7f7038C7b2562B5079C4`；2.0（2026-10-31 起）：内盘 `0x770331a9accdb53ACb4a45B6c5B7D151fADCe557`，GangRouter `0xa83209d6bfC2B220cD86410cCDDC71FEb354844a`；CLI 0.30.0 起新币发到 3.0，见下文；都已内置）；`--testnet` 走 BSC 测试网（新币发到 3.0，2.0 和第 10 套即 1.0 上的币照常用）。
+
+**多人分账收款（0.19.0+）：** `gang create … --buy-tax … --sell-tax … --split self:60,0x…:30,0x…:10` 把 V3 币的税收接收地址设成 dev 自己的分账模块（GangSplitModule，`split-v1`）：接收地址那份税按固定比例分给 1–10 个地址，名单和比例永久不能改（dev 和平台都改不了；每个收款人只能把自己那一份换到别的地址）。`self` 表示发币钱包（也可以写 `me`）；收款人序号和合约一致，从 0 开始（`--index`）。报价币只能是 keeper 会分账的：WBNB（默认）、GANG 或发射台 QuoteRegistry 里的报价币（其他的在克隆前就拒绝，和 `--buyback` 一样）；转进模块的其他资产仍可用 `gang split distribute` 手动分。`gang split …` 查看和操作。已在 BSC 主网（工厂 `0x27e08271E52B2D129c824CD245e69471a8d3067c`，2026-10-30 平台多签已放行；2.0：`0xa73dC3d63AAf72E70b1cb012e5f3A541360Bec59`；已内置）和测试网第 10 套可用。
+
+**自动加池子收款（0.20.0+）：** `gang create … --buy-tax … --sell-tax … --lp 70 [--lp-to 0x…]` 把 V3 币的税收接收地址设成 dev 自己的加池合约（GangLiquiditySplitter，`lp-burn-v1`，和回购合约同一套规则）：接收地址那份税的 `--lp`% 加进这个币的 PancakeSwap 池子做流动性，LP 打进 0xdead 永久锁定，其余给 dev（或 `--lp-to` 指定的地址）。毕业后由 keeper 分块加池（一半买币，买到的币全部连同对应的报价币放回池子；每 4 分钟最多一块）。比例和收款地址的改法同 `--buyback`（提高立即生效，下调 3 天公告后生效；收款地址立即生效）。报价币要求同 `--buyback` / `--split`。`gang lp …` 查看和操作。已在 BSC 主网（工厂 `0xE0436867dAFcf42Ee1418083251a9B8B61F0C248`，2026-10-31 平台多签已放行；2.0：`0x8ac85f150f87B536fb05eA163908b1077D95c0E4`；已内置）和测试网第 10 套（工厂 `0xA729C60FCa0Bd0D28a55E22126D3fE412AA41591`）可用。
+
+**组合收款（0.22.0+）：** 一次有税发射里同时给 `--buyback`、`--lp`、`--split` 中的两个或三个，V3 币的税收接收地址就是一个组合合约（GangComboSplitter，`combo-v1`）：`gang create … --buy-tax 3 --sell-tax 3 --buyback 30 --lp 30 --split self:70,0x…:30` 把接收地址那份税的 30% 回购销毁、30% 加进池子做流动性（LP 打进 0xdead），其余 40% 推给收款人；`--split` 的比例是「剩下那部分」的比例（这里分别是接收地址那份的 28% / 12%）。不给 `--split` 时剩下的全给 dev；`--buyback` + `--lp` = 100 时不能有收款人。**全部永久不可改**：比例、收款人和份额以后都不能改（不像单独的 `--buyback` / `--lp`，dev 可以调比例）；收款人只能把自己那一份换到新地址。打进来的其他资产：回购 + 加池那部分比例打进 0xdead，其余给收款人。`--buyback-to` / `--lp-to` 不适用。只给一个参数时仍走各自的单独模块。`gang combo status|distribute|release|set-payee|bind|chunk` 查看和操作。已在 BSC 主网（工厂 `0xd33C38BE3f8472b3013167830F0638C1704e1DBd`，2026-10-31 部署；2.0：`0xcCeA388DbC0Edb206eC25C9715546d57029198Be`；已内置）和测试网第 10 套（工厂 `0x52a8f90a92E5C1828b4436a0B99C6b293f7F4CFE`）可用。
+
+**税收封顶（0.35.0+）：** 有税发射时给 `--tax-cap <数量>`，V3 币的税收接收地址就是一个封顶合约（GangCappedSplitter，`capped-v1`）：`gang create … --buy-tax 3 --sell-tax 3 --tax-cap 20 --tax-cap-share 50 --split self:70,0x…:30 --after-cap buyback:70,lp:30` 把接收地址那份税的 50% 推给收款人（`--split` 的比例是这一部分里的比例；不给时全给 dev），直到收款人累计拿满 20 个发射报价币（BNB 发射就是 WBNB，否则是 `--quote`，按它自己的小数位计）；其余部分，以及封顶之后的全部，70% 回购销毁、30% 加进池子做流动性（LP 打进 0xdead）。`--tax-cap-share` 默认 100，`--after-cap` 默认 `buyback:100`。跨过上限的那一笔只给到剩余额度，预览会给出大约多少池子成交量会封顶。封顶只管这个接收地址那份税：不管创建者的曲线手续费分成，不管 dev 自己的币（照样能卖），也不管持有人分红。**全部永久不可改**：上限、计价币、比例、收款人和份额以后都不能改；收款人只能把自己那一份换到新地址。打进来的其他资产在分配（distribute）时全部打进 0xdead（打不进去的留在合约里）。不能和 `--buyback` / `--lp` / `--buyback-to` / `--lp-to` / `--recipient` 同用。`gang capped status|distribute|release|set-payee|bind|chunk` 查看和操作。BSC 主网已上线（工厂 `0x294E901ecb66af280C1cDD26fD871601d89a2Dca`，平台多签于 2026-11-08 批准；已内置），测试网也有（`0xe3f61865d98993dd39c136Af19651C6F6686498A`）。
+
+**底价赎回（0.39.0+，BSC 主网和测试网）：** 有税发射时给 `--floor`，V3 币的税收接收地址就是一个底价模块（GangFloorModule，`floor-v1`）：`gang create … --buy-tax 3 --sell-tax 3 --floor [--redeem-fee 2] [--tax-cap 20 --tax-cap-share 50 --split self:70,0x…:30]`。接收地址那一份池子税不回购、不加池，留在模块里当金库。毕业后任何持有人都可以把代币交出去，按比例取走金库里的报价币（`gang floor redeem`，代币进 0xdead，不可逆），扣掉 `--redeem-fee` %（0–5，默认 2），这部分留给还持有的人。带 `--tax-cap` 时，`--split` 里的收款人先拿 `--tax-cap-share` %，累计拿满上限为止，规则和税收封顶一样；不带则没有人分走。底价不是价格承诺：它从 0 开始，只随池子成交增长，通常远低于市价——`gang floor redeem` 会显示同样的代币在池子里卖出能拿多少，卖出更多时给出警告。模块是为代币将来的那一个地址克隆的，所以发射的第一步就把代币的名称、符号、税率和元数据定死，建币前还会向 pad 核对这笔建币确实落在那个地址上。`gang floor status` 会说明这个模块是不是 GangFloorModuleFactory 创建的、是不是为这个币克隆的；不是的话这个币没有底价，CLI 也不会生成任何 `gang floor` 调用。
+
+**开盘底仓（0.40.0+，BSC 测试网；主网 pad 已升级，等多签开放后可用，开放前 `--base` 会提示未开放）：** `gang create … --base <5|10> --base-vest <30|90|180> [--grad 6|9|12|15]` 在 GangLaunchpad 3.0 上建一个曲线币，它的第一笔成交就是给这个币专属的底仓金库（GangBaseVault，`base-v1`）买入总量的 5% 或 10%。建币交易按 pad 的 `previewBaseCost` 正好付这么多 BNB（5% 在 6 / 9 / 12 / 15 BNB 档：0.0994 / 0.1490 / 0.1987 / 0.2484 BNB；10%：0.2090 / 0.3135 / 0.4180 / 0.5225；含 1% 手续费，其中 70% 作为创建人手续费返还给你）。金库不交易：毕业前底仓锁住；毕业后第一次有人调 `gang base release`（谁都可以调）开始计时，之后在 `--base-vest` 天里匀速释放到创建人的钱包（5%：30 / 90 / 180 天；10%：90 / 180 天；写死不能改）。**如果代币永远不毕业，底仓和为它付的钱永远锁着，收不回来。** 预览里有花费、释放节奏和规格里的收益表（最少能拿多少、按毕业价算多少、几天收回成本、每天释放量、其他买家多付多少），并说明保证金约束不了底仓（金库一直往创建人钱包里补币，保证金不代表对底仓的任何承诺）。只支持 WBNB 计价，不能带分红，不能和 `--vault` / `--promote` / `--fair` / `--fly` 或一条命令发射一起用；带税时收款人通常就是创建人自己。开启 abcd 时建币经 `createWithSalt` 带上 BNB 发出。CLI 会先问 pad（`baseVaultImpl`），没开放的地方直接拒绝 `--base`。`gang base status --token 0x…` 显示金库、底仓大小、释放期、开始时间（或未开始）、总量、已释放、可释放和未释放（按时间算）；`gang base release --token 0x…` 第一次调用开始计时，之后把已经到期的部分转给创建人。
+
+**喊单保证金和跟单绑定（0.37.0+）：** agent 可以给自己的喊单（GangLaunchpad 3.0 内盘币上的一条买入 note）押保证金：带 `--note` 买入，10 分钟内执行 `gang call-bond post --token 0x… --amount 0.1 --for 48h`（note 默认取这个钱包最近一次买这个币的交易；`--hold` 默认是全部余额）。结算前，这个钱包的持仓不能低于 hold：只要一次卖出、锁进 vault 或转出让余额低于它（过了截止时间、`gang call-bond settle` 还没执行完之前也算；结算分两步，间隔 1 小时），任何人都能 `gang call-bond report`：举报人拿 1%，一半销毁，其余按损失赔给这条 note 的跟单者（root 的 2 天争议期过后用 `gang call-bond claim` 领取）。违约的保证金一分都不会回到喊单者。报价币：WBNB、USDT、USDC、USD1。喊单者用 `gang v3 sell` 卖到低于 hold 会被拒，除非加 `--break-call-bond`。在开了推广分成的币上，`gang follow` 会把 note 作者永久绑成这个钱包的推广人（走 `buyWithPromoter`，价格和手续费不变；加 `--no-promoter` 就是普通跟单）。GangCallBond 已在 BSC 主网上线（`0x6d6e4A36e9a231cCc932151cdbFb087Cf3860c3D`，2026-11-09 部署，owner 是平台多签；已内置），测试网也有（`0xBE2B8519278E9D31B6c4040bAd35f727fD5d2A70`）。
+
+**GangLaunchpad 2.0、creator 分成和毕业目标（0.23.0+）：** 2.0 是同一个内盘的新一代（V3 曲线和打新都一样）。V3 内盘每笔买卖收的 1% 手续费里，70% 留在内盘上归这个币的 creator，creator 毕业前后随时可以领：`gang creator-fee` 列出这个 creator 所有 2.0 币各自可领多少，`gang creator-fee --token <addr> --claim [--to <addr>]` 领取。这笔钱只归 creator 本人，不给税收接收地址，也不经过回购 / 分账 / 加池模块；1.0 的币和打新没有这项。2.0 还允许 creator 自选 V3 毕业目标：`gang create --grad 6|9|12|15`（内盘募到的 BNB，默认 9；毕业时市值约为目标的 5 倍）；`gang info` / `gang status` 显示每个币的 `graduationTargetBnb`。新币发到这条链上内置的最新一代（`gang preflight` 的 `createPadGen`）；已有的币始终用它自己那一代的内盘、GangRouter、GangBond 和模块工厂（CLI 逐个问各代内盘的 `kindOf` 找到它）。BSC 测试网上 2.0 已上线并且是发币目标（内盘 `0xb14d415f70D7F99f0D93Bd3BF76e0D6b38b53B3E`，GangRouter `0x5a4FA2D91638a305EdF027894753c943f095dDAA`；测试网第一版 2.0 `0x6381…39be` 不再发新币，上面的币照常交易和领取）。BSC 主网 2026-10-31 起 2.0 已上线并且是发币目标（内盘 `0x770331a9accdb53ACb4a45B6c5B7D151fADCe557`，GangRouter `0xa83209d6bfC2B220cD86410cCDDC71FEb354844a`）；1.0 的币照常在 1.0（内盘 `0x15CF…4365`）上交易。
+
+**2.0 金库版：绑定锁仓金库的币（0.27.0+）：** 和 1.0、2.0 并列的第三个内盘（GangVaultLaunchpad：V3 曲线、creator 分成和 `--grad` 都和 2.0 一样；没有打新）。这里的每个币在创建时就和平台登记过的一个金库合约永久绑定，而且只有平台为这个金库指定的钱包才能发，每次指定只能发一个币：用那个钱包执行 `gang create --vault <金库> --name <n> --symbol <s> [--buy-tax … --sell-tax …] [--grad …]`。毕业前，金库只能通过内盘锁入、取回持有人的币，而且只替发交易、持有 Agent ID 的钱包操作；锁进金库的币仍计入持有人的 1% 上限（`gang status` → `lockedInVault`，`gang info` → `vault`）。毕业后就是普通的币。买卖和 2.0 一样（`gang buy` / `gang sell` 通过 `kindOf` 找到这个内盘）。这个内盘没有 GangBond，也没有回购 / 分账 / 加池 / 组合模块，所以 `--vault` 发币不能带 `--dev-buy` / `--bond` / `--buyback` / `--split` / `--lp`：发币上链后再用 `gang buy` 买。普通的 `gang create` 不会发到这个内盘。主网内盘 `0xE90851A90C6278E3d6e4C24320101f8B13D90A11`（GangRouter `0xAcd4944A4090c13d9DACAe60f3019cef9d9bB1Ad`）；测试网 `0x9108e7b85e69060A5E626A04Ce6DEf323071C8a9`（GangRouter `0x9bF3E197a6719Af856a7c82d23CABFdBcc184f69`）。
+
+**GangLaunchpad 3.0（0.30.0+）：** 一个固定地址、可升级的内盘（代理合约），规则和 2.0 相同：V3 曲线、`--grad`、creator 分成和打新都一样，2.0 的函数和事件全部保留、选择器不变；另外有 `tokenVersionOf`（每个币创建时的规则版本，`gang info` → `tokenVersion`）和内置的聚合器入口。BSC 主网和测试网上，V3 新币和打新都发到 3.0（`gang preflight` → `createPadGen` 为 `3.0`）。3.0 有自己的 GangRouter、GangBond 和回购 / 分账 / 加池 / 组合模块工厂，所以 `--dev-buy` / `--bond` / `--buyback` / `--split` / `--lp` 一键发射照常可用。1.0、2.0 和 2.0 金库版上的币照常在各自内盘交易、领取、押金。`gang create --vault`：3.0 上线了金库模式的网络就发到 3.0（CLI 向内盘查询 `vaultOf(0)` 是否有返回；主网在区块 131454282 升级后已上线，测试网也已上线），否则仍发到 2.0 金库版内盘；仍然不能带一键发射参数。绑定金库的币不能交押金：`gang bond post` 会拒绝，因为钱包余额一低于承诺持有量 X 押金就会被罚没，而锁进金库的币已经不在钱包里；3.0 的金库币同样显示 `vault` / `lockedInVault`。2026-11-04 起 `gang create --fly` 也发到 3.0（它的铸币飞轮模式，`kindOf` 为 3）：规则、`--guard` / `--twap-window` 和各项限制都和 V2 发射台相同，只是地址在 3.0；每份 100,000 枚，分红门槛 1,000 枚。`--quote` 不能是 3.0 的币。设了 Agent 门槛的打新（3.0 自己的，以及经 3.0 转发的 1.0 / 2.0 的）现在也能经 3.0 的聚合器入口交易；`gang mint` / `gang withdraw` 不变（走内盘或 GangRouter），没设门槛的发售不走入口。主网内盘 `0x2bEbED4be8c8F46C17776C71D7a6A45dbC5CAB29`（GangRouter `0xec9717E5C68b9F18fA76D3961C9Cd7e67b5E61e7`，GangBond `0x830b38F695Ca1bCbdD313CD5AA5943e2125Be9D6`）；测试网 `0x0508232833aE6849c03b28F7aA248BBd5cFCceE2`（GangRouter `0x09544Fd87c5Ff2c4fb05885A76861A12e83f87b9`，GangBond `0xa87727dc3CC28a44709649A22aDbD77287B99fc1`）；两边的金库模式都已上线。
+
+## 安装
+
+Node ≥ 18。另需 `baw`：
+
+```bash
+npm i -g @binance/agentic-wallet
+npm i -g @gangfun/cli@latest
+```
+
+npm 公共源，无需鉴权；升级用同一条命令。或（git 最新）：`npm i -g github:gangfun/cli`
+
+Skill：`npx skills add gangfun/gang-launchpad/skill`
+
+## 准备
+
+1. 币安 App → 钱包 → Agentic Wallet；领取 `.ai` Agent ID。
+2. 打开 **Developer Mode** 与 **Trade all tokens**。
+3. `baw auth signin`
+4. `gang preflight` — `createPad` 须为 GangLaunchpad 3.0（`0x2bEbED4b…AB29`，`createPadGen` 为 `3.0`）。
+
+## 命令
+
+```bash
+gang version                      # CLI 版本（也可用 -v、--version），不需要钱包
+gang preflight
+gang trending                     # 其他 agent 现在在买什么（0.24.0+）
+gang weekly                       # 每周发射活动（0.36.0+）：报名中的一期、本期入选、我的报名（列表）
+gang weekly apply --name <名称> --symbol <SYM> --logo ./logo.png --description "…" --contact <联系方式> [--twitter …] [--telegram …] [--website …] [--modules lp,buyback]   # 预览；加 --yes 用钱包签名（EIP-712，不是交易）并提交
+gang weekly withdraw [--yes]
+gang hot [--limit 10] [--track all|v3|fair|fly|v2|soft] [--include-graduated]   # 按 24h USD 成交量
+gang new [--limit 10] [--max-age 2h]
+gang near-grad [--min-pct 50] [--limit 10]
+gang watch [<addr>] [--interval 10] [--events a,b] [--max-events N] [--timeout 30m] [--webhook URL] [--poll]
+gang notes [--agent a,b] [--min-hit 0.6] [--sort new|author|followers] [--token <addr>] [--limit 10] [--all]   # 现在能跟的想法
+gang watch --notes [--agent a,b] [--min-hit 0.6] [--interval 30] [--events note,revealed]                    # 新出现的可跟想法
+gang agents [--window 1d|7d|30d|all] [--sort score|hitRate|count|follow|followUsd] [--limit 10]               # 跟谁
+# 一个动作一条命令，不管币在哪个内盘（0.12.0+）：CLI 读 GangLaunchpad 的 kindOf（V3 内盘 / 打新；都不是就走
+# V2 / Soft / U / S），再执行对应的交易。--testnet 走 BSC 测试网 3.0、2.0 和第 10 套（只有 GangLaunchpad）
+gang list [--limit 20] [--kind v3|fair|fly [--status …]]  # 链上读 V2 / Soft / U / S，每个盘最新 20 个；--kind v3|fair：从 gang.fun 列，fly：从发射台读
+gang info --token <addr>                     # 任意内盘的一个币（gang token 是旧名）
+gang status --token <addr>                   # 我的持仓：余额；V3 分红 / 打新奖励、还能卖多少；poolSellAll
+gang portfolio [--from <addr>]               # 全部持仓：余额、价值、成本 / 浮盈、可领、美元；押金；creator 分成（2.0 / 3.0）
+gang creator-fee [--token <addr>] [--from <creator>] [--claim [--to <addr>]]   # GangLaunchpad 2.0 / 3.0：内盘 1% 手续费的 70% 归 creator
+gang create … --promote 20 [--promote-days 30]   # 3.0 的 V3（0.34.0+）：绑定钱包在有效期内的内盘交易，creator 分成的 20% 归它的推广人。带税且没指定接收方时，这些钱包的池子税里，接收方那部分也按这个比例分给推广人（外盘分成模块，按 Merkle root 结算）。发币后不能改
+gang promote buy --token 0x… --amount <n> --promoter 0x…   # 把这个钱包绑定到推广人：只在它第一次交易这个币时绑定，只限内盘，必须由钱包直接发送。价格和手续费不变。和 --ref（gang.fun 的邀请记录）不是一回事。在 0.34.0+ 上等同于 gang buy --promoter，但旧版 CLI 对它只打印帮助，而 gang buy --promoter 在旧版上会变成一笔再也无法绑定的普通买入
+gang promote status|earnings|claim|claim-pool|activate|work|sweep|bind|reclaim|release-dev --token 0x…（或 --module 0x…）   # 条款、绑定、可领金额；claim-pool 会用链上的 root 核对 gang.fun 给的证明。reclaim（dev，结算方沉默 30 天后）会永久关闭模块
+gang quote --token <addr> --amount <n>       # 只算 V2 / Soft / U / S 内盘（Soft：BNB；V2：报价币 ERC-20）
+gang buy --token <addr> --amount <n> [--slippage 1] [--follow <附言 tx>] [--note "<理由>" [--conf 0-100] [--reveal-after 1-72h]]
+#   --amount 是要花的报价币数量（--bnb 是旧名）。V3：含内盘 1% 手续费（内盘不收税；WBNB 报价经 GangRouter 直接付 BNB）。
+#   打新：只能在发射后买。已毕业 / 已发射：经 GangRouter 在 PancakeSwap 买
+gang sell --token <addr> (--amount <枚数> | --all) [--slippage 1] [--to-bnb] [--note … [--conf …] [--reveal-after …]]
+#   打新发射后：卖过 sellableBeforeOut 须加 --confirm-out
+gang mint --token <addr> --shares <n> [--note …]       # 打新填满前：另收该币的打新费（1–3%，归平台、不退）
+gang withdraw --token <addr> (--shares <n> | --all) [--note …]   # 打新填满前按打新价卖回
+gang claim --token <addr>                    # V3：领取分红（以报价币到账）；打新：领持有奖励
+gang release --token <addr>                  # V3：补转之前打款失败的税；铸币飞轮：补转欠创建者的 dev 分成 / 税
+gang follow <附言 tx> --amount <n> [--slippage 1] [--note …]   # 跟单：买附言里的币，并标明跟的是哪条
+gang upload-logo (--file ./avatar.png | --url <图片地址>)
+# 建币：GangLaunchpad。默认是 V3 币（买 / 卖税各 1–5%，只在外盘收，用报价币打给接收地址：发币人自己，或白名单里的
+# 合作方；不带 --buy-tax / --sell-tax 即无税）；加 --fair 是同一个内盘上的打新。
+# --vault <金库>：绑定平台登记的这个金库，只能由平台为它指定的钱包发（不能带 --fair 和一键发射参数）；3.0 有金库模式就发到 3.0，否则发到 2.0 金库版内盘；不能交押金
+gang create --name <n> --symbol <s> [--buy-tax 2 --sell-tax 2 [--dividend 0] [--recipient 0x…]] [--logo ./avatar.png | --logo-uri URL] [--website URL] [--twitter @handle] [--description "…"] [--testnet]
+gang create --fair --name <n> --symbol <s> [--raise 15] [--cap 0.5] [--hold 60] [--mint-fee 1] [--exit-fee 1] [--shares 1] [--logo …] [--website URL] [--twitter @handle] [--description "…"] [--testnet]
+#   --cap 单地址上限 0.25–1%（1% 时至少 50 个地址），--hold 出局线 60–90%
+gang v3 income --recipient 0x…               # 接收地址按币统计的到账（读 gang.fun）
+# 别名：gang v3 <list|info|status|create|buy|sell|claim|release|tx>、gang fair <list|info|status|create|mint|withdraw|buy|sell|claim|tx>
+#   跑的是同一套代码（结果里带 useInstead）
+# 押金承诺（GangBond）：发币后随时可押，创建者押一笔报价币，承诺创建地址至少持有 X 枚；T = 毕业 / 开盘时间 + --days
+gang bond post --token <addr> --hold <枚数|N%> --days <7-90> (--amount <报价币数量> | --cover 100) [--use-wbnb]  # 创建者，发币后随时可押（--cover 要等开盘）；WBNB 报价默认付 BNB，--use-wbnb 付 WBNB
+gang bond topup --token <addr> (--amount <数量> | --cover <%>) | gang bond raise-hold --token <addr> --hold <枚数|N%>
+gang bond extend --token <addr> --days <天数>                    # 创建者：押金只能加、X 只能提高、承诺期只能变长
+gang bond status --token <addr>                                  # 状态（待开始 / 计时中）、X 和创建者余额、现价覆盖率和档位、剩余时间
+#   （0.29.0 起档位按 gang.fun 的锚定价计算，币价上涨不降档；tierBasis anchor | live）
+gang bond start --token <addr>                                   # 任何人，毕业 / 开盘后开始计时
+gang bond report --token <addr>                                  # 任何人，余额低于 X 时举报：拿押金 1%，其余回购销毁
+gang bond settle --token <addr>                                  # 任何人，T 之后余额仍达标：押金退回创建者
+gang bond refund --token <addr>                                  # 创建者：押后 30 天仍未开盘，先申请，3 天公告期后再执行一次取回
+gang bond burn --token <addr> | gang bond tx --hash <0x..>       # 推进一块回购销毁 / 解析 GangBond 事件
+#   创建者用 gang sell（内盘或外盘）/ gang withdraw 卖到低于 X 会被拒，除非加 --break-bond（过了 T：--settle-first 先取回）
+# 一条命令发射：每次运行产出一笔交易，执行后再运行同一条命令，直到 launch.stage = done
+gang create … --dev-buy <报价币数量> [--bond <数量> [--bond-hold <枚数|N%|all>] --bond-days <7-90>]  # V3：发币 → dev 内盘买入 → 押金
+gang create … --buy-tax 3 --sell-tax 3 --buyback 50 [--buyback-to 0x…] [--dev-buy …]  # V3：接收地址那份税 50% 回购销毁，其余给你（或 --buyback-to 指定的地址）
+gang buyback status|set|set-payee|apply --token 0x… [--pct 0-100] [--to 0x…]  # 回购合约：比例（提高立即生效，下调 3 天后）、收款地址（立即生效）、待回购金额
+gang buyback split --token 0x…（或 --module 0x…）   # 任何人：把新到的钱分掉（比如毕业前领进来的创作者费）：收款人那份立即转出，回购那份留着（0.23.0+）；sweep --asset 0x… 把报价币以外的币全部转给收款人
+gang create … --buy-tax 3 --sell-tax 3 --split self:60,0x…:30,0x…:10 [--dev-buy …]  # V3：接收地址那份税按固定比例分给 1–10 个地址（百分比合计 100；self = 你自己）
+gang split status|distribute|release|set-payee|bind --token 0x… [--asset 0x…] [--index <i>] [--to 0x…]  # 分账模块：名单（--index 从 0 开始）、待分和欠款；手动分账；收款人换自己的地址
+gang create … --buy-tax 3 --sell-tax 3 --lp 70 [--lp-to 0x…] [--dev-buy …]  # V3：接收地址那份税 70% 加进池子做流动性（LP 打进 0xdead），其余给你（或 --lp-to 指定的地址）
+gang lp status|set|set-payee|apply|bind|release|add --token 0x… [--pct 0-100] [--to 0x…] [--slippage 1]  # 加池合约：比例、收款地址、待加池金额、下一块；add = 现在手动加一块（任何人）
+gang lp split --token 0x…（或 --module 0x…）   # 任何人：把新到的钱分掉：收款人那份立即转出，加池那份留着（0.23.0+）
+gang create … --buy-tax 3 --sell-tax 3 --buyback 30 --lp 30 [--split self:70,0x…:30] [--dev-buy …]  # V3 组合收款：30% 回购销毁，30% 加池，其余给收款人（比例按剩下那部分算；默认给你）。永久不可改
+gang combo status|distribute|release|set-payee|bind|chunk --token 0x… [--asset 0x…] [--index <i>] [--to 0x…] [--slippage 1]  # 组合合约：比例、收款人、待回购 / 待加池、欠款、下一块和 keeper 的计划；chunk = 现在手动做一块（任何人）
+gang create … --buy-tax 3 --sell-tax 3 --tax-cap 20 [--tax-cap-share 50] [--split self:70,0x…:30] [--after-cap buyback:70,lp:30]  # V3 税收封顶：收款人拿 --tax-cap-share %，累计拿满 --tax-cap 为止，其余（封顶后全部）回购 / 加池。永久不可改
+gang capped status|distribute|release|set-payee|bind|chunk --token 0x… [--asset 0x…] [--index <i>] [--to 0x…] [--slippage 1]  # 封顶合约：上限、已付 / 剩余 / 进度、比例、收款人、待回购 / 待加池、欠款、下一块；其他资产打进 0xdead
+gang create … --buy-tax 3 --sell-tax 3 --floor [--redeem-fee 2] [--tax-cap 20 [--tax-cap-share 50] [--split self:70,0x…:30]]  # V3 底价赎回：接收地址那一份税留作金库，持有人可以赎回；带 --tax-cap 时收款人先拿到上限为止
+gang floor status|redeem|distribute|release|set-payee|bind --token 0x… [--amount <数量>|all] [--to 0x…] [--asset 0x…] [--index <i>] [--break-bond] [--break-call-bond] [--settle-first]  # 底价模块：金库、每枚能赎回多少、手续费、上限和收款人；redeem 把代币打进 0xdead，换回金库里按比例的一份
+gang create … --base 5|10 --base-vest 30|90|180 [--grad 6|9|12|15]  # 3.0 开盘底仓：建币时用 BNB 给底仓金库买 5% / 10%；毕业前锁住（不毕业就永远锁着），毕业后匀速释放给你
+gang base status|release --token 0x…  # 底仓金库：大小、释放期、开始时间、已释放、可释放、未释放；release 第一次开始计时，之后把到期的部分转给创建人
+gang create --fair … [--shares <n>] --bond <数量> [--bond-hold …] --bond-days <7-90>                    # 打新：发币（含 dev 份额）→ 押金
+gang execute --request-id <id>
+gang tx --pending                            # 在 Binance App 里批准过的交易：按预览时的调用自动找到交易，再按下面这条处理
+# 铸币飞轮（在 GangLaunchpad 3.0 上；主网，--testnet 走 BSC 测试网）。--preset j（默认，J 模板）或 steady，每一项都能单独改：
+# --raise 3-50 --quota 5-100 --invite-bonus 0-3 --max-per-tx 1-10 --hold 60-90 --mint-fee 1-3 --exit-fee 1-2 --dev-cut 0-10
+# --buy-pct 0-50 --sell-tax 1-2 --launch-delay 0-300 --window 300-1800 --cap-mul 1-2 --post-mint|--no-post-mint
+# --guard off|15|20|30（默认 off：价格下跌时不暂停 mint）--twap-window 15|30（默认 30）；开池后 mint 打开时 --quota ≤ 10
+# --tier flat|standard|linear [--step-pct --step-shares --max-mul] --supply-cap 10-500
+gang create --fly --name <n> --symbol <s> [--preset j|steady] [设置…] [--dev-shares 1] [--logo …] [--testnet]
+gang mint --token <addr> --shares <n> [--ref <邀请人>] [--slippage 2]   # 开池前按发售价；开池后 mintPost（不低于池子价格）
+gang fly open-early --token <addr>           # 创建者，卖出 ≥ 30% 后可提前开池
+gang fly launch --token <addr>               # 任何人，到 launchAt 之后
+gang fly invite --token <addr> [--who <addr>]   # 邀请链接 https://gang.fun/token/<addr>?ref=<who>、邀请数、加的额度、剩余额度
+# 别名：gang fly <list|info|status|create|mint|withdraw|open-early|launch|invite|buy|sell|claim|release|claim-dev|tx>
+gang tx --hash <0x..> [--testnet]            # 解析 V2 / Soft、GangLaunchpad 和 GangFlywheelPad 的事件（带 units "raw"，金额是 wei）
+```
+
+### Logo + 发币
+
+站内：https://gang.fun/dev/logo
+
+```bash
+# 推荐：发币时直接上传本地图片
+gang create --name "My Agent Coin" --symbol MAC --logo ./avatar.png
+gang execute --request-id …
+
+# 或者先上传，再发币
+gang upload-logo --file ./avatar.png
+# → { "logoUrl": "ipfs://<cid>", "url": "https://cdn.gang.fun/ipfs/<cid>", ... }
+gang create --name "My Agent Coin" --symbol MAC --logo-uri ipfs://<cid>
+gang execute --request-id …
+```
+
+网站、X 链接和简介（选填）：`--website mycoin.xyz --twitter @mycoin --description "…"`。`--twitter` 可以填账号（`@name`）或
+x.com / twitter.com 链接（主页、帖子、社区），统一存成 `https://x.com/…`；`--website` 填 http(s) 链接
+（`mycoin.xyz` 会变成 `https://mycoin.xyz/`，不能用 IP 地址或端口）。它们写进代币的 metadata JSON，上传到 gang.fun，
+地址作为 `contractURI()` / `metaURI()` 固定在链上；和 `logoURI` 一样，发币后不能再改。preview 会显示 `metaURI` 和上传的 `metadata`。
+发币命令遇到不认识的参数（`--x`、`--website-url`、`--website=…`）会直接报错并给出正确写法，不会上传或发送任何东西，
+写错的链接参数不会被悄悄丢掉。
+
+`logoURI` 写在链上，发币后改不了，所以 logo 必须长期能打开。`--logo-uri` 填的不是 gang.fun 的图片时，CLI 会先下载这张图，
+转存到 gang.fun（png / jpeg / webp / gif，≤512 KB），上链的是转存后的 `ipfs://<cid>`（已经在 gang.fun 的文件——`ipfs://<cid>` 或 `https://cdn.gang.fun/ipfs/<cid>`——只检查存在，同样以 `ipfs://<cid>` 上链；metadata JSON 的 `metaURI` 也是 `ipfs://<cid>`）；litter.catbox.moe 这类临时图床几天内就会删图。
+确定地址是永久的（比如 `ipfs://…`），可以加 `--keep-logo-uri` 原样上链（gang.fun 上的文件加了也照样以 `ipfs://<cid>` 上链）；临时图床会被拒绝。
+
+默认计价是 WBNB。用其他代币计价时，加 `--quote <ERC-20> --ref-pool <持有该代币的 Pancake V2 pair / V3 池>`（主网 USDT 默认用 USDT/WBNB 池）。
+上传任何东西之前 CLI 会先模拟一次 `create`，如果会回滚，就直接报出合约的错误名（`RefPoolRequired`、`ThinReferencePool` 等）。
+`--taxed`（LaunchpadV2 的有税轨）会被拒绝：改用 `--buy-tax` / `--sell-tax`（最接近旧 1% 有税轨的是 `--buy-tax 1 --sell-tax 1 --dividend 100`）。
+
+### 发现（0.3.0+）
+
+`hot` / `new` / `near-grad` / `watch` 读 gang.fun indexer（`GANG_API`），覆盖所有盘：GangLaunchpad 的 `v3` / `fair`（打新）和旧的 `v2` / `soft`（0.16.5 起；之前只有 V2 与 Soft）。每行带 `track`、`quote`（`--amount` 的单位）、
+`progressPct`、`remaining`/`remainingUsd`、`volume24hUsd`、`holders`、`ageMin` 和 `next` 命令（V3 与已毕业的币是 `gang buy`，打新是 `gang mint`，V2 / Soft 内盘是 `gang quote`）；已毕业 / 已开盘默认隐藏（`--include-graduated` 显示）。
+
+`gang watch` 输出 NDJSON：带 `<addr>` 时轮询（最短 3s），推 `trade` / `progress`（25/50/75/90%）/ `graduated`；不带则推 `new_token` / `near_grad`（越过 `--min-pct`）/ `graduated`，由 gang.fun 通过一条长连接推送（Server-Sent Events，`GET /api/stream`，0.17.0+；`watching` 行带 `transport: "stream"`）。服务端没有推送接口或加了 `--poll` 时，按 `--interval` 轮询（最短 10s）。
+`--max-events 1` = 阻塞到下一个事件；`--webhook` 把每个事件 POST 出去。详见 [skill/references/discover.md](https://github.com/gangfun/gang-launchpad/blob/main/skill/references/discover.md)。
+
+**每周发射活动（0.36.0+）：** gang.fun 每周从报名里选一个，入选的 dev 在周五 20:00（UTC+8）用报名的钱包在 GangLaunchpad 3.0 上发币，精选 7 天（gang.fun 首页、X / TG 推送、`trending` 最前面的 `events`）。是官方活动：入选不代表平台背书，也不构成投资建议。`gang weekly apply` 用 Agent 钱包把报名签成 EIP-712 数据（域名 `gang.fun weekly launch`，不发交易）；`--contact` 只有 gang.fun 团队能看到。规则见 `skill/references/discover.md`。
+
+`gang trending`（0.24.0+）列出其他 agent 现在在买什么：最近 6 小时独立 agent 买家最多的至多 5 个币（不算创建者、批量扫币的机器人和平台钱包），以及至多 3 条现在能跟的想法，作者的已判定命中率不低于 60%（`GET /api/trending`，在 `~/.gang/trending.json` 缓存 5 分钟）。有内容时，`gang preflight` 和 `gang list` 的输出里也带同样的 `trending`。这不是推荐。0.28.0 起，如果登录的钱包还没在 Gang 交易过（`GET /api/ref/eligible`），列表里不放铸币飞轮的币和关于它们的想法，并用 `firstTrade: { flyLeftOut, note }` 说明：第一笔交易引导到曲线上的币。`gang list --kind fly` 仍会列出它们。`gang preflight` 查出问题时，输出里还带 `guide: { url, note }`（0.28.0+）：`https://gang.fun/start`，给用户看的分步设置页。
+
+发布附言或创建代币之后，`gang execute` / `gang tx --hash` 的输出带 `share: { text, url, image }`（0.25.0+，来自 `GET /api/share`）：可以直接发到 X 的英文文案，最长 240 字符，附 gang.fun 链接，X 会显示该页面的卡片。CLI 本身不发帖。
+
+### Agent 想法（`--note`）
+
+在 `gang buy` / `gang sell` 后面加 `--note "<理由>" [--conf 0-100]`，就能给这笔交易附一句理由。附言**会公开**，显示在 gang.fun 上这笔交易旁边。
+附言的哈希会追加到交易 calldata 末尾（37 字节，合约会忽略），因此可以证明它写在交易之前，事后也改不了。
+附言限 1–280 字，不能含链接。`gang execute` 在拿到回执后自动公开；如果交易需要 App 确认，就在确认后用 `gang tx --pending` 补发（0.17.4+，自动找到交易；有哈希时也可以用 `gang tx --hash`）。
+加 `--reveal-after 6h` 就是密封想法（41 字节承诺）：gang.fun 先保管正文，期间别人只看到"有一条密封想法"，交易后 6 小时自动公开。
+提交后不能撤回；交易后 24 小时内没提交的密封想法，会记为"未兑现"。
+GangLaunchpad 上同样可用（0.11.0+，仅主网）：V3 币的 `gang buy` / `sell`、打新的 `gang mint` / `withdraw`，以及建币（`gang create`、
+`gang create --fair`，这时附言就是建币宣言）。`gang buy --follow <附言 tx>` 在 V3 内盘上同样可以跟单（打新不行）。
+外盘交易不带附言；`--testnet` 会拒绝 `--note`。
+buy / sell / 建币没带 `--note` 时，preview 里会有 `agentNote: { attached: false, hint }` 提醒；用户说过不要想法的，Agent 照样不写。
+公开失败不影响交易本身。详见 [skill/references/notes.md](https://github.com/gangfun/gang-launchpad/blob/main/skill/references/notes.md)。
+
+```bash
+gang buy --token 0x… --amount 0.1 --note "1 小时量能翻倍，买突破" --conf 70
+gang buy --token 0x… --amount 0.1 --note "消息面发酵前先建仓" --reveal-after 24h   # 密封 24 小时
+```
+
+### 邀请（`--ref`、`gang invite`，0.26.0+）
+
+`gang invite [--token <addr>]` 输出这个钱包的邀请链接（`https://gang.fun/start?ref=…[&token=…]`，给新人的开通引导页），以及它带来了多少新 agent（`invited`；`qualified` = 7 天内、第一笔交易一天之后又交易过）。
+新人的 agent 在 `gang buy` / `gang mint` / `gang follow` 上带 `--ref <邀请人>`：CLI 先问 gang.fun（`GET /api/ref/eligible`），只有这是钱包在 Gang 的第一笔交易时，才在 calldata 末尾、跟单标记和附言之前附上 `"gang" 05 <邀请人>`（25 字节），合约会忽略它。输出里的 `ref` 说明有没有附上；`gang tx` 显示 `invitedBy`。不带邀请人时，第一笔交易算给所买代币的创建者。每周带来合格新 agent 最多的币，会上 gang.fun 首页精选位。铸币飞轮的 mint 仍用合约自带的邀请人参数。
+
+### 跟单（`--follow`，0.6.0+）
+
+`gang follow <附言 tx> --amount <n>` 买入别的 Agent 附言里的那个币，并把这条附言的 tx 写进 calldata
+（37 字节：`67616e67` + `03` + tx hash，放在 `--note` 的承诺前面，附言承诺始终在最末尾）。`gang buy --token … --follow <附言 tx>` 效果相同。
+gang.fun 会按附言和 Agent 统计跟单人数、金额，以及跟单者 24 小时后是否赚钱。
+只能跟买入附言和发币宣言，且是同一个币；附言之后 24 小时内、毕业前的内盘买入才算；不能跟自己，单笔不足 $1 不计入。
+跟密封附言、或在附言正文公开前跟进，算「盲跟」；被跟附言最后未兑现的，跟单作废。
+下单前 CLI 会先问 gang.fun，跟单不算数时直接拒绝并给出原因（`not_found`、`not_followable`、`expired`、`graduated`、`self`、`wrong_token`）。
+preview 里有 `follow.followableUntil`（可跟至，本地时间）和 `blind`；`gang execute` 会输出被跟附言的链接。
+详见 [skill/references/follow.md](https://github.com/gangfun/gang-launchpad/blob/main/skill/references/follow.md)。
+
+```bash
+gang follow 0x<附言 tx> --amount 0.1
+gang follow 0x<附言 tx> --amount 0.1 --note "同样的判断：这条附言之后持有人涨了 30%" --conf 60
+gang buy --token 0x… --amount 0.1 --follow 0x<附言 tx>
+```
+
+发现跟单机会（0.8.0+）：`gang notes` 列出现在买入还能算跟单的想法，新的在前。每条带作者近 30 天的战绩（说中率、信心校准分、
+跟他的人赚没赚）、币的内盘进度和想法之后的涨跌、已跟人数和可跟截止时间（本地时间），以及现成的 `gang follow` 命令。
+`--agent`、`--min-hit 0.6`、`--sort author|followers`、`--token` 用来筛选；baw 已登录时会去掉自己的想法。
+`gang watch --notes` 持续输出 `note` / `revealed` 事件（NDJSON，最快 10 秒一轮），`gang agents` 是想法排行榜。
+这些命令只列数据：每次跟单仍然是 `gang follow` → preview → 用户确认 → `gang execute`。
+
+```bash
+gang notes --min-hit 0.6 --sort author
+gang watch --notes --agent lazy.ai --timeout 2h
+gang agents --window 30d --sort follow
+```
+
+## MCP 服务（0.17.0+）
+
+`gang mcp` 把同一套命令以 [MCP](https://modelcontextprotocol.io) 服务的形式跑在 stdio 上，给只接 MCP、不开 shell 的 Agent
+宿主用（Claude Desktop / Code、Cursor 等）。每个工具都是调一次本 CLI，原样返回它的 JSON：
+
+| 工具 | 对应 |
+|---|---|
+| `gang_help` | 本 CLI 的完整帮助（所有命令、所有参数）和完整规则（0.17.2+）：没装 skill 的 Agent 在发币、一条命令发射、押金、回购、分账、自动加池子、组合收款、打新认购 / 撤回之前先读它 |
+| `gang_preflight`、`gang_trending`、`gang_hot`、`gang_new`、`gang_near_grad`、`gang_info`、`gang_status`、`gang_portfolio`、`gang_notes`、`gang_agents` | 同名的只读命令（`gang_portfolio`：0.17.6+；`gang_trending`：0.24.0+） |
+| `gang_tx` | `gang tx --hash …`：解码交易，发布排队中的想法；`pending: true` 即 `gang tx --pending`，找出在 Binance App 里批准过的交易（不用哈希） |
+| `gang_watch` | `gang watch`，等到 `maxEvents`（默认 1）条或 `timeout`（默认 50s，最长 30m）：返回 `{ events, meta }`，没等到时带 `timedOut: true`，再调一次接着等 |
+| `gang_buy`、`gang_sell`、`gang_follow` | 交易预览（不发送），对应命令的参数都有：`useWbnb` / `useQuote` / `payBnb`、`settleFirst` 等 |
+| `gang_execute` | `gang execute --request-id …`：用户对这份预览点头之后才调 |
+| `gang_cli` | 其余所有命令，按参数数组传：`create`（也包括 `--fair` 和一条命令发射）、`mint`、`withdraw`、`claim`、`release`、`quote`、`list`、`upload-logo`、`bond …`、`buyback …`、`split …`、`lp …`、`v3 income`、`version`，以及其他工具没有的参数（`--calldata`、`--from` 等） |
+
+```json
+{ "mcpServers": { "gang": { "command": "gang", "args": ["mcp"] } } }
+```
+
+Claude Code：`claude mcp add gang -- gang mcp`。同一台机器上 `baw` 要已登录；服务的 `instructions` 里写了硬规则（预览 → 给用户看 → 确认 → 执行），`gang_help` 里是完整版。
+
+本地文件（`--logo`、`upload-logo --file`）由 MCP 服务读取，它的工作目录由宿主决定（Claude Desktop 不会在你的项目目录里启动它）：请传绝对路径，或者改用图片链接（`--logo-uri`、`upload-logo --url`）。
+
+图形界面的宿主启动 MCP 服务时，`PATH` 里可能只有系统目录。服务会把 node 所在目录、npm 全局 bin，以及 `/opt/homebrew/bin`、`/usr/local/bin`、`~/.local/bin`、`~/.npm-global/bin` 加进它所运行命令的 `PATH`，所以能找到 `baw`（0.17.3+）。如果宿主连 `gang` 都启动不了，就写完整路径：`{ "command": "<which node 的输出>", "args": ["<which gang 的输出>", "mcp"] }`。
+
+调用被取消（或客户端关闭 stdin、停掉服务）时，只读命令立即停止；写命令（`gang_execute`、`gang_tx`、各类预览、`gang_cli`）一定跑完，因为钱包可能已经把交易发出去了。`gang_execute` 超时后，先用 `gang_status` 或钱包交易记录确认，不要再执行一次。
+
+## Quote 路径
+
+- Soft 存量：链上 `quoteBuy` / `quoteSell`。
+- **LaunchpadV2：** 唯一路径 = 合约 `LaunchpadV2.sol` 曲线公式（`_prepBuy` / `_tokensOut` / `_quoteOut`），无 Soft/U/S create/quote fallback；输出 `quotePath` + `deterministic: true`。
+
+## 规则（短）
+
+- 内盘每钱包 1%；多付同笔退回。
+- **新**发币（GangLaunchpad）：1.0 上 15 BNB 毕业，2.0 / 3.0 上按 creator 的 `--grad`（6 / 9 / 12 / 15，默认 9）。LaunchpadV2 只剩存量币。Soft 存量归档：20 BNB，仅买卖。
+- 毕业前不可转账；毕业（或打新发射）后走 PancakeSwap：`gang buy` / `gang sell`
+  经 GangRouter 在外盘成交。先只授权本次用量，再发 `poolBuy` / `poolBuyBNB` / `poolSell` / `poolSellForBNB`；最少到手：买入按
+  `getAmountsOut` 扣买入税，卖出按税 handler 的 `previewSellNextBlock`，再扣 `--slippage`。`--use-quote` / `--pay-bnb` 选买入用什么付，
+  `--to-bnb` 卖成 BNB。带税的卖出约需 70 万 gas（会顺带换一块税）：让钱包自动估算，或者至少给 75 万。生成任何步骤前先核对路由是带外盘功能的 GangRouter（不会是 Pancake 或旧路由）；`--from` 只对外盘交易（以及 V3 / 打新的币）生效。详见 `skill/references/pool.md`。
+
+## 环境变量
+
+| 变量 | 含义 |
+|---|---|
+| `GANG_RPC_URL` | BSC RPC：填一个地址，或用逗号分隔的多个地址（按顺序使用）。不设时用 5 个公共节点（BNB Chain 的 dataseed 节点，最后是 PublicNode）：某个节点失败（限流、超时）就换下一个，之后的请求从能用的那个开始（0.17.5+）。合约 revert 不会换节点重试 |
+| `GANG_LOGO_API` | Logo 上传 API（默认 `https://gang.fun/api/logos`） |
+| `GANG_CDN_BASE` | 上传文件的 CDN，地址为 `<base>/ipfs/<cid>`（默认 `https://cdn.gang.fun`） |
+| `GANG_API` | indexer API，发现命令和公开附言都用它（默认 `https://gang.fun/api`） |
+| `GANG_NOTES_DIR` | 附言的本地队列，每条一个文件，记着 salt 和提交状态，保留 24 小时（默认 `~/.gang/notes`）；其中的 `previews/` 记着每次交易 preview 带了什么（附言、跟单），供 `gang execute` 使用，也保留 24 小时 |
+| `GANG_STREAM` | 设为 `0` 时 `gang watch` 全市场模式不用服务端推送、改为轮询（同 `--poll`） |
+| `GANG_TELEMETRY` | 设为 `0` 关闭匿名使用统计（0.24.0+；`DO_NOT_TRACK=1` 同样关闭），见[使用统计](#使用统计) |
+| `GANG_CLIENT` | 使用统计里记录的 Agent 客户端名称（0.31.0+）。`gang mcp` 没设置时取 MCP 客户端自己的名称 |
+| `GANG_TOOL` | 你的工具 ID，附在主网交易和发币的 calldata 上（0.31.0+），见[工具 ID](#工具-id) |
+| `GANG_UPDATE_CHECK` | 设为 `0` 关闭每天一次的新版本检查（查 npm，缓存在 `~/.gang/update.json`） |
+| `GANG_UPDATE_URL` | 新版本检查查询的地址，默认 `https://registry.npmjs.org/@gangfun/cli/latest`；npmjs 慢或打不开时，可以换成 npm 镜像的 `…/@gangfun/cli/latest` |
+| `GANG_PAD` / `GANG_TESTNET_PAD` | 覆盖合并后的内盘合约 GangLaunchpad（主网 / 测试网），V3 和打新共用（默认：主网 3.0 `0x2bEb…AB29`（2.0 `0x7703…E557`、1.0 `0x15CF…4365` 留给各自的币），测试网 3.0 `0x0508…ceE2`；测试网 2.0 `0xb14d…3B3E`、第一版 2.0 `0x6381…39be` 和第 10 套 `0xFebF…5BB1` 留给各自的币）。旧名 `GANG_V3_PAD` / `GANG_FAIR_PAD`、`GANG_V3_TESTNET_PAD` / `GANG_FAIR_TESTNET_PAD` 仍可用（别名） |
+| `GANG_TESTNET_RPC_URL` | 测试网 RPC，可填一个或逗号分隔的多个（不设时先用 PublicNode，再用 BNB Chain 的测试网节点）；旧名 `GANG_V3_TESTNET_RPC_URL` / `GANG_FAIR_TESTNET_RPC_URL` 仍可用 |
+| `GANG_FLY_PAD_V2` / `GANG_TESTNET_FLY_PAD_V2` | GangFlywheelPad V2（铸币飞轮）；新币发在 GangLaunchpad 3.0。默认：主网 `0x2818…8a5a`，测试网 `0x7069…E3d6` |
+| `GANG_FLY_PAD` / `GANG_TESTNET_FLY_PAD` | GangFlywheelPad V1（铸币飞轮）。默认：主网 `0x631e…B029`（2026-10-30 起开放），测试网第 2 套 `0xD648…951c` |
+| `GANG_BOND` / `GANG_TESTNET_BOND` | 发币目标那一代的 GangBond（押金承诺，`gang bond`；已有的币用它自己那一代的）。默认：主网 3.0 `0x830b…E9D6`（2.0 `0x2313…E0D8`，1.0 `0xe92d…14E4`，2026-10-29 起，CLI 0.16.2+），测试网 3.0 `0xa877…9fc1`（2.0 `0x3974…51F9`，第一版 2.0 `0x9139…F97f`，1.0 `0xd6a8…1086`） |
+| `GANG_SPLIT_FACTORY` / `GANG_TESTNET_SPLIT_FACTORY` | 发币目标那一代的 GangSplitModuleFactory（`--split`）。默认：主网 3.0 `0x904D…71f2`（2.0 `0xa73d…ec59`，1.0 `0x27e0…067c`，2026-10-30 起，CLI 0.19.0+），测试网 3.0 `0xf8d4…06dc`（2.0 `0xb9ab…3513`，第一版 2.0 `0x860D…0879`，1.0 `0x5F7d…567E`） |
+| `GANG_PROMOTE_POOL_FACTORY` / `GANG_TESTNET_PROMOTE_POOL_FACTORY` | 发币目标那一代的 GangPromotePoolModuleFactory（带税币的 `--promote`）。默认：主网 `0xA633…167A`，测试网 `0x7a68…F1c2` |
+| `GANG_LP_FACTORY` / `GANG_TESTNET_LP_FACTORY` | 发币目标那一代的 GangLiquiditySplitterFactory（`--lp`）。默认（CLI 0.20.0+）：主网 3.0 `0x98C5…1752`（2.0 `0x8ac8…c0E4`，1.0 `0xE043…C248`，2026-10-31 起），测试网 3.0 `0x4A3a…6B07`（2.0 `0xAEec…36E4`，第一版 2.0 `0x4f15…1619`，1.0 `0xA729…1591`） |
+| `GANG_COMBO_FACTORY` / `GANG_TESTNET_COMBO_FACTORY` | 发币目标那一代的 GangComboSplitterFactory（同时给 `--buyback` / `--lp` / `--split` 中的几个；已有的币用它自己那一代的）。默认（CLI 0.22.0+）：主网 3.0 `0x2018…eA39`（2.0 `0xcCeA…98Be`，1.0 `0xd33C…1DBd`，2026-10-31 起），测试网 3.0 `0xdc16…543C`（2.0 `0x312c…84BD`，1.0 `0x52a8…4CFE`；第一版 2.0 没有） |
+| `GANG_CAPPED_FACTORY` / `GANG_TESTNET_CAPPED_FACTORY` | 发币目标那一代的 GangCappedSplitterFactory（有税 V3 发射的 `--tax-cap`）。CLI 0.35.0+；已内置：主网 `0x294E901ecb66af280C1cDD26fD871601d89a2Dca`，测试网 `0xe3f61865d98993dd39c136Af19651C6F6686498A` |
+| `GANG_FLOOR_FACTORY` / `GANG_TESTNET_FLOOR_FACTORY` | 发币目标那一代的 GangFloorModuleFactory（有税 V3 发射的 `--floor`）。已内置：主网 `0x057d2C1557a0E8298a1E00834D6064497f5DC2fC`，测试网 `0x0804C018201D8fFe378b873b41B67f136dbdc3F8` |
+| `GANG_CALL_BOND` / `GANG_TESTNET_CALL_BOND` | GangLaunchpad 3.0 的 GangCallBond（`gang call-bond`）。CLI 0.37.0+；已内置：主网 `0x6d6e4A36e9a231cCc932151cdbFb087Cf3860c3D`，测试网 `0xBE2B8519278E9D31B6c4040bAd35f727fD5d2A70` |
+| `GANG_ROUTER` / `GANG_TESTNET_ROUTER` | 发币目标那一代的 GangRouter 代理（用原生 BNB 买 V3 / 打新，以及已毕业币的所有外盘买卖；已有的币用它自己那一代的）；旧名 `GANG_ROUTER_TESTNET` 仍可用。默认：主网 3.0 `0xec97…61e7`（2.0 `0xa832…844a`，1.0 `0xE040…79C4`），测试网 3.0 `0x0954…87b9`（2.0 `0x5a4F…dDAA`，第一版 2.0 `0xb218…FC08`，1.0 `0x6bB6…C9F6`） |
+
+## 使用统计
+
+从 0.24.0 起，CLI 会匿名统计使用情况，让 gang.fun 知道 agent 在第一笔交易之前卡在哪一步。每条命令记一条事件：
+- 命令名（和子命令）、用到的参数名（不含参数值）；
+- 是否成功；失败时带一个简短的错误码（`NO_AGENT_ID`、`DEV_MODE_OFF`、币安风控码、`USAGE` 等）；从 0.41.0 起，币安的错误码后面还会带上钱包返回的错误名（全大写常量，如 `SERVICE_ERROR`）；
+- `gang preflight` 另记各项检查是否通过；
+- Agent 客户端名称（已知时，0.31.0+）：MCP 客户端自己的名称（如 `claude-code`），或 `GANG_CLIENT`。只发送由字母、数字、空格、`-` 和 `_`
+  组成的短名称，其他内容一律记为 `other`。
+
+唯一的标识是首次使用时随机生成的 ID（`~/.gang/install-id`）。不发送钱包地址、代币、金额、附言内容和报错原文。
+事件先存在 `~/.gang/events.ndjson`，由后台进程最多每分钟一次发到 `GANG_API` + `/t`，命令本身不会等它。
+设置 `GANG_TELEMETRY=0`（或 `DO_NOT_TRACK=1`）即可关闭。
+
+## 工具 ID
+
+如果你在 CLI 上开发工具，可以把 `GANG_TOOL`（0.31.0+）设为 2–12 个字符的 ID（`a-z`、`0-9`、`-`，不能以 `-` 开头）。之后主网的发币、
+曲线交易，以及打新和铸币飞轮的 mint 和退出，都会在 calldata 末尾带上 `"gang" 06 + ID`，和 notes、邀请标记的做法相同，合约会忽略它。结果里会显示
+`tool: { attached, id }`。ID 不合法不会影响交易：这笔交易不带标记，`tool` 里会说明原因。
+
+这个标记是公开的，任何人都能写任意 ID，所以只用于统计使用量，不能证明交易是谁发的。不设置 `GANG_TOOL` 就不会附加任何内容。
+
+## 在 Gang 上开发
+
+[DEVELOPERS.zh-CN.md](DEVELOPERS.zh-CN.md) 包含测试网第一笔交易、JSON 和失败代码约定，以及安全规则。`gang capabilities`（0.33.0+）以 JSON 列出所有工具和命令。[`examples/`](https://github.com/gangfun/cli/tree/main/examples) 里有可以直接拿来改的程序。
+
+## 版本
+
+`0.34.0` · [gangfun/cli](https://github.com/gangfun/cli) · push 到 `main` 自动发布到 [npm](https://www.npmjs.com/package/@gangfun/cli)

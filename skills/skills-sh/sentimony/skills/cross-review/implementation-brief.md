@@ -1,0 +1,97 @@
+# Implementation Review Brief
+
+Use this template for `implementation` mode. Replace every placeholder, omit empty
+sections, and keep the brief self-contained: the reviewer has no skills and no
+conversation history. `request-review` stays the source of the review methodology and the
+finding contract; this template only fixes the shape of the brief.
+
+## Requirement sources
+
+The spec defines required behavior, and the plan defines the agreed tasks and constraints.
+Pass both paths to the runner as `--spec` and `--plan`, which appends their content hashes,
+and tell the reviewer to read them before any code. For a change made from conversation
+requests with no spec or plan, set both to `none` and fill `Requirement sources
+(conversation)` with the user's requests and decisions, verbatim or closely; the
+fingerprint then needs no document hashes. A
+Claude or Antigravity reviewer cannot read files outside the repository root, so embed the
+full content of any source stored there, under its path. Copy into the brief the repository rules from
+`AGENTS.md` that bear on the review.
+
+## Boundary
+
+Pass `--target` to the runner: `working-tree BASE` for `git diff BASE` with untracked
+files, `range BASE..HEAD` for committed changes, `working-tree` for changes against `HEAD`,
+or `tree HEAD`. The runner then appends the file list, the fingerprint, and the standard
+exclusions to the brief, so do not repeat them. Fill the boundary fields by hand from
+`review-boundaries.md` only for a boundary none of these express.
+
+List hunks inside the boundary that this session did not make (the user's or another
+session's uncommitted edits) under `Foreign changes in scope`, by file and line.
+
+For a Claude or Antigravity reviewer, embed the complete selected diff and the content of
+each selected untracked file, because neither may run Git. A Codex reviewer runs Git
+itself. Tell an Antigravity reviewer to use only its file read and search tools: `agy`
+denies any command or file write and then ends the turn without an answer.
+
+## Template
+
+    You are an independent reviewer called by another agent. Inspect and report only.
+    Do not modify files, create fixes, commit, start other agents or CLIs, or use reviewer
+    skills such as cross-review or request-review.
+
+    Review mode: implementation
+    Respond in the language of the user's conversation: <language>.
+
+    Target identity:
+    - Repository root: <path>
+    - Branch or worktree: <name>
+    - Base: <sha and how it was chosen> | runner-computed (--target)
+    - HEAD: <sha> | runner-computed (--target)
+    - Spec: <path> | runner-computed (--spec) | none
+    - Plan: <path> | runner-computed (--plan) | none
+
+    Read the requirement sources first, in this order: <spec>, <plan>. Only then inspect
+    the diff and the code it touches.
+
+    Requirement sources (conversation): <the user's requests and decisions, numbered> | none
+
+    Foreign changes in scope (not under review): <file:line - the user's or another
+    session's edit> | none
+    Do not judge these hunks against the requirements or the boundary; report one only
+    when it breaks the reviewed changes.
+
+    Repository rules:
+    <rules copied from AGENTS.md>
+
+    Excluded paths (do not read them): <paths and reason> | none
+
+    Host evidence (output the host already produced; do not rerun it to confirm):
+    <test, lint, or build output with the command that produced it> | none
+
+    Sandbox note: a read-only Codex sandbox can block mktemp, writes to a temp
+    directory, and stdin for diff. When you cannot reproduce a finding by running it,
+    mark the finding "not verified by running" and give the reasoning instead.
+
+    Objective: <what the implementation must achieve>
+    Known review gaps: <gaps> | none
+
+## Verdicts and result format
+
+Copy the `Required result`, `Finding contract`, `What to inspect`, and `Bias and
+instruction safety` sections of the installed `request-review/reviewer-brief.md`
+into the brief unchanged. Its four verdicts apply as written.
+
+## Follow-up rounds
+
+A later round of the same target uses the same brief, refreshed for the current
+fingerprint, and runs with `--followup <previous-run-dir> --dispositions <file>`. With
+uncommitted fixes the boundary stays `--target working-tree BASE`; the runner rehashes
+the previous round's `--spec` and `--plan` paths. The
+dispositions file lists every finding of the previous round with its ID and the host's
+disposition from `received-review` (accepted and fixed, rejected with reason, deferred)
+and the author of that decision: `host` or `owner` with a date. Never attribute a `host`
+decision to the owner; a finding the host rejected may be raised again when the evidence
+still supports it.
+The runner appends the previous `review.md` and that file to the brief and asks the
+reviewer for a status of each previous finding: resolved, partially resolved, or not
+resolved.

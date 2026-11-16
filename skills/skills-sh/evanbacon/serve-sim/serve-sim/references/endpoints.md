@@ -1,0 +1,115 @@
+# HTTP and WebSocket endpoints reference
+
+For agents that want to bypass the CLI — for example to drive gestures from a long-running process without forking `npx` per call — serve-sim exposes two surfaces over HTTP. The agent playbook (when to use the CLI vs these endpoints, refs, delivery failures) is [agent-guide.md](agent-guide.md).
+
+## Contents
+
+- Stream server (Swift helper, port 3100)
+- Preview middleware (port 3200)
+- Authentication
+- Discovering the live URLs
+
+## Stream server (Swift helper, default port 3100)
+
+This is the per-device binary started for each booted simulator. It serves the video stream and accepts input over a binary WebSocket.
+
+| Method | Path | Returns / accepts |
+|---|---|---|
+| `GET` | `/stream.mjpeg` | MJPEG video stream as `multipart/x-mixed-replace; boundary=frame`. Use this in `<img>` tags. |
+| `GET` | `/stream.mjpeg?raw=1` | Same JPEG bytes as `application/octet-stream`. Use this when consuming from `fetch().body.getReader()` — WebKit refuses multipart responses there. |
+| `GET` | `/ws` | Binary WebSocket. Accepts touch / button / orientation / CoreAnimation / memory-warning messages. See "WebSocket message types" below. |
+| `GET` | `/config` | JSON `{width: number, height: number, orientation: string}` describing the current display. |
+| `GET` | `/health` | JSON `{status: "ok"}`. Use for liveness probes. |
+| `GET` | `/ax` | JSON accessibility tree (axe-compatible flat-array shape). |
+| `GET` | `/ax/snapshot[?all=1]` | Compact agent snapshot `{screen, nodes:[{ref, role, type, label?, value?, id?, enabled?, frame:{x,y,w,h}, center, offscreen?}]}` in device points. Becomes the device's ref session. |
+| `POST` | `/ax/act` | JSON `{ref:"@e2", action?:"tap"\|"longpress", settle?:bool, timeoutMs?}`. Taps the element's center → `{ok, action, ref, target, settle, diff}`. Unknown/stale/offscreen refs → `404 unknown_ref` / `409 stale_ref` / `409 offscreen` (`409 no_snapshot` before any snapshot); nothing is tapped. Requires `Content-Type: application/json`. |
+| `GET` | `/ax/settle[?timeoutMs=]` | Waits for the framebuffer to go quiet and confirms with one AX read (default timeout 3000 ms, hard) → `{settle:{settled, waitedMs, reason, samples, signals, busy?}, diff:{added, removed, changed}}` vs the last state returned to you (the latest snapshot or settle/act diff, so elements that appeared in a pre-tap read you never saw still show as `added`). `reason` is `frames-quiet`, `ax-quiet` (two matching AX reads; used on screens that keep drawing, such as a caret or spinner, and when frames are unavailable) or `timeout`. |
+| `HEAD` | `/ax/snapshot`, `/ax/settle` | `200` with no body. A liveness probe only: it does not read the tree, wait for settle, touch the ref session, or check that accessibility is available (a `GET` may still answer `503 ax_unavailable`). |
+| `GET` | `/foreground` | JSON `{bundleId: string, pid: number}` of the frontmost app. |
+
+The `/ax/snapshot`, `/ax/act` and `/ax/settle` requests run one at a time per device; with four already running or queued, more get `429 busy` (retry when they finish).
+
+This server sends no CORS headers and accepts WebSockets only from a same-origin page. Browser pages on another origin should go through `simMiddleware`'s same-origin `{basePath}/helper/<device>/…` proxy; non-browser clients (curl, scripts) are unaffected.
+
+### WebSocket message types
+
+The `/ws` endpoint accepts binary frames. Two formats are in use today:
+
+**Touch (prefix `0x10`)** — 12 or 13 bytes:
+
+```
+[0x10] [subtype:u8] [x:f32] [y:f32] [seq:u16] [edge:u8?]
+```
+
+- `subtype`: 0 = begin, 1 = move, 2 = end
+- `x`, `y`: normalized floats in `[0, 1]`
+- `seq`: monotonic 16-bit counter the server uses to coalesce frames
+- `edge`: optional, 0–4 as in [gestures.md](gestures.md)
+
+**Multi-touch (prefix `0x11`)** — 20 bytes:
+
+```
+[0x11] [subtype:u8] [x1:f32] [y1:f32] [x2:f32] [y2:f32] [seq:u16]
+```
+
+A JSON channel also exists with these message-type bytes; refer to the helper source if you need them:
+
+- `0x03` — JSON touch event (legacy)
+- `0x04` — JSON button event
+- `0x05` — JSON multi-touch event (legacy)
+- `0x06` — JSON keyboard event (`{type: down|up, usage: u32}`, USB HID Usage Page 0x07)
+- `0x07` — JSON orientation event
+- `0x08` — JSON CoreAnimation debug toggle
+- `0x09` — empty body, triggers memory warning
+
+For most agents, the CLI is the right entry point. Use the WebSocket directly only when you need sub-CLI-latency input streams (drag animations, multi-finger gestures).
+
+## Preview middleware (default port 3200)
+
+This is a Node middleware that serves the preview UI and proxies state. It can be run standalone (`npx serve-sim`) or embedded in another dev server (`serve-sim/middleware`).
+
+| Method | Path | Returns / accepts |
+|---|---|---|
+| `GET` | `/.sim` | The preview HTML page (React UI showing the simulator stream). |
+| `POST` | `/.sim/auth` | Trade the share link's `#token=` fragment (sent in an `X-Serve-Sim-Auth` header) for the HttpOnly auth cookie. Same-origin only. |
+| `GET` | `/.sim/api` | JSON state: `{device, pid, port, url, streamUrl, wsUrl}`. |
+| `GET` | `/.sim/ax` | SSE stream of accessibility tree snapshots. |
+| `POST` | `/.sim/exec` | Run a shell command on the host. **Off unless started with `--allow-exec`; requires a bearer token.** |
+| `POST` | `/.sim/appstate` | SSE-like stream of frontmost-app changes. |
+| `GET` | `/.sim/devtools` | WebKit Inspector bridge for in-app web views. |
+| `POST` | `/grid/api` | List running devices. |
+| `POST` | `/grid/api/start` | Spawn a helper for a specific device. |
+| `POST` | `/grid/api/shutdown` | Shut down a specific device. |
+| `POST` | `/grid/api/memory` | Memory usage report. |
+
+When embedding the middleware in another dev server (Metro, Vite, Express), the `basePath` is configurable:
+
+```ts
+import { simMiddleware } from "serve-sim/middleware";
+app.use(simMiddleware({ basePath: "/.sim" }));
+```
+
+## Authentication
+
+- The Swift stream server has no authentication. It listens on `0.0.0.0` by default — be careful when tunneling.
+- Remote (non-loopback or proxied) requests need the `--auth-token` / `SERVE_SIM_AUTH_TOKEN` token; without one the server refuses them. Scripts send `Authorization: Bearer <token>`. Browsers open the share link `<preview>/#token=<token>`: the fragment never reaches the server, and the page's auth bootstrap exchanges it at `POST /.sim/auth` for an HttpOnly cookie. Never put the token in a query string — `?token=` does not authenticate, and URLs end up in server and proxy logs.
+- The preview middleware's `/.sim/exec` endpoint is disabled unless the server was started with `--allow-exec` (otherwise `403 {"error":"exec disabled; start with --allow-exec"}`). When enabled it is loopback-only and requires a bearer token that no HTTP response contains: it is written to an owner-only (0600) file under `$TMPDIR/serve-sim/exec-tokens/<port>.token` and removed when the server stops. Prefer `serve-sim exec <command>`, which reads that file; otherwise send `Authorization: Bearer <token>` with a same-origin `Origin` header.
+
+## Discovering the live URLs
+
+The simplest path is the CLI:
+
+```sh
+npx serve-sim --list -q
+```
+
+Returns a JSON array of running streams, each with `url`, `streamUrl`, `wsUrl`, `device`, `pid`, `port`. An agent should call this once on entry to discover ports — they are not guaranteed to be 3200/3100 if other processes occupy those defaults.
+
+Alternatively, read state files directly:
+
+```sh
+ls $TMPDIR/serve-sim/server-*.json
+cat $TMPDIR/serve-sim/server-<udid>.json
+```
+
+This is faster than spawning `npx` but couples you to the file format. Prefer `--list -q` for portability.

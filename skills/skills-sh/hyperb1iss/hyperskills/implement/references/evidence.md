@@ -1,0 +1,32 @@
+# Evidence and limits
+
+Reviewed 2026-09-04. The [Astra guidance](https://developers.openai.com/api/docs/guides/latest-model) explicitly notes over-testing on small tasks and unnecessary blocking from conflicting instructions. The proportional checks and user precedence in the skill address those risks.
+
+Neither sibling reference (`benchmarks.md`, `recovery.md`) establishes universal edit ratios or model-independent performance guarantees.
+
+## 2026-10-27 review
+
+- Anthropic's [Opus 5 prompting guide](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-opus-5), read at the source on 2026-10-27, says explicit verification instructions such as "use a subagent to verify" cause over-verification on that model and should be removed.
+- Anthropic's [Fable 5 prompting guide](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-fable-5), read at the source on 2026-10-27, says separate, fresh-context verifier subagents tend to outperform self-critique on long-running tasks; the trigger in this skill follows consequence and run length to honor both.
+
+## 2026-10-30 review corpus
+
+Observed, not external research: 161 distinct inline findings from a single reviewer over about a week on roughly fifty pull requests in a private repository, classified independently by a second model. 76% ended with a code change. The largest classes: a test that stays green with the code under test removed or wrong (21) plus a changed failure path with no test (12); a wrong number, label, or message at an edge (21); a copy that will drift (16); one failure taking out healthy work (12); a race or ordering gap (12); a silent failure (11); unbounded cost (10); a boundary failing open (9). The self-review table in `SKILL.md` encodes those classes. One reviewer, one repository, one week; the classes are a checklist, not a frequency claim about other teams. Names and repository are omitted on purpose.
+
+## 2026-11-06 review
+
+Thariq Shihipar (Claude Code, Anthropic), [Unhobbling Claude: the difficulties and processes of building agents](https://www.youtube.com/watch?v=FlHfhwQaAFM), a talk at a Browserbase event published 2026-09-25, read from the auto-generated transcript on 2026-11-06: in eval transcripts the model finds an edge case the prompt did not cover and makes a judgment call one way or the other, and surfacing that call for a human to answer would pass almost every eval they have. The section on recording calls follows that claim; the one-question rule for material readings comes from the maintainer's contract, not the talk. He also reports that the Claude Code system prompt shrank by about 80% for the Claude 5 models, with prohibitions replaced by criteria; the contributor guide carries that heuristic.
+
+Limits: one engineer's account of the Claude Code harness and of eval transcripts, with no numbers and no controlled comparison. His observation that the Claude 5 models want smaller context and no examples concerns tool descriptions in that harness, not skill prose.
+
+## 2026-11-11 screen
+
+Observed with this repository's eval harness (`evals/cases/screen`), Claude Sonnet 5.5 at low effort through the controlled file-tools adapter, ten repeats per arm. On a task whose request says malformed lines are skipped, the model dropped them without a log line 10 times of 10 with no skill and 10 of 10 with this skill preloaded, while the batch-isolation row of the same table moved its case from 0 of 10 to 9 of 10. With the dropped-record row widened to name a deliberately skipped record, the same task passed 8 of 10 and batch isolation 10 of 10.
+
+Limits: a development result on the one case the wording was written against. A held-out case in another domain was saturated with no skill (19 of 20), so it neither confirms nor contradicts the change. Fable 5.2 passed every case at both effort levels with no skill loaded, so nothing here shows an effect on that model.
+
+## 2026-11-15 fix replay
+
+Observed with this repository's eval harness (`evals/replay`), Claude Sonnet 5.5 at low effort through the container shell adapter. Each case replays a real fix commit from a public Python monorepo: the agent gets the tree before the fix and a description of the bug, and the commit's own tests grade the result. On ten development cases the fix was correct in every arm, but a test shipped with it in 0 of 30 trials with no skill and 9 of 30 with this skill preloaded. Every source commit had shipped one. The sentence saying a bug fix ships its regression test was written from that gap, then checked on ten holdout cases it had not seen, two repeats each: trials shipping a test that fails on the unfixed tree and passes on the fix went from 5 of 20 to 14 of 20, with correctness at 19 of 20 and 20 of 20 and cost unchanged.
+
+Limits: one model, one effort level, one repository, twenty paired trials. Three of the ten holdout cases shipped no test in either repeat with the sentence present. Fable 5.2 was not run on the holdouts; on the development cases it shipped a test in 7 of 10 trials with no skill and 10 of 10 with this skill, one repeat each.

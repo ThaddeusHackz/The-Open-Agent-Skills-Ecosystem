@@ -1,0 +1,936 @@
+{
+  "generated_at": 1794863391,
+  "live_website": "https://www.skills.sh/",
+  "totals": {
+    "skills_sh": 18550,
+    "skills_sh_github": 18474,
+    "skills_sh_site": 76,
+    "qoder": 43554,
+    "combined": 62104
+  },
+  "coverage": {
+    "skills_sh_repos_processed": 2306,
+    "skills_sh_repos_failed": 50,
+    "skills_sh_repos_failed_retryable": 0,
+    "skills_sh_repos_failed_permanent": 50,
+    "skills_sh_unresolved_skills": 1547,
+    "skills_sh_site_failed": 1,
+    "skills_sh_site_failed_retryable": 0,
+    "skills_sh_site_failed_permanent": 1,
+    "qoder_indexed": 43554,
+    "qoder_extracted": 43554,
+    "qoder_failed": 0,
+    "qoder_failed_retryable": 0,
+    "qoder_failed_permanent": 0
+  },
+  "qoder_top_categories": {
+    "Productivity": 6240,
+    "Content Creation": 4078,
+    "Marketing & Sales": 3773,
+    "Agent Evolution": 3747,
+    "Knowledge": 3583,
+    "Design": 3507,
+    "Other": 3057,
+    "Database & Analytics": 3016,
+    "Legal": 2784,
+    "Developer Tools": 1903,
+    "Finance": 1541,
+    "Coding": 1247,
+    "Security & Testing": 1124,
+    "Product Management": 1080,
+    "E-commerce & Retail": 948,
+    "HR & Recruiting": 787,
+    "DevOps": 692,
+    "Code Review": 225,
+    "Workflow": 222
+  },
+  "files": {
+    "skills-sh": "catalog/skills-sh.json",
+    "qoder": "catalog/qoder.json"
+  },
+  "unresolved_sample": {
+    "mattpocock/skills": [
+      "ubiquitous-language",
+      "resolving-merge-conflicts",
+      "request-refactor-plan",
+      "caveman",
+      "zoom-out",
+      "qa",
+      "to-issues",
+      "decision-mapping",
+      "to-prd",
+      "write-a-skill",
+      "edit-article",
+      "obsidian-vault",
+      "design-an-interface",
+      "writing-great-skills",
+      "diagnose"
+    ],
+    "vercel-labs/agent-skills": [
+      "vercel-deploy"
+    ],
+    "remotion-dev/skills": [
+      "mediabunny"
+    ],
+    "supabase/agent-skills": [
+      "skill-creator"
+    ],
+    "leonxlnx/taste-skill": [
+      "full-output-enforcement",
+      "imagegen-frontend-mobile",
+      "image-taste-frontend",
+      "brandkit",
+      "redesign-existing-projects",
+      "industrial-brutalist-ui",
+      "high-end-visual-design",
+      "gpt-taste",
+      "image-to-code",
+      "imagegen-frontend-web",
+      "stitch-design-taste",
+      "minimalist-ui"
+    ],
+    "microsoft/azure-skills": [
+      "azure-cost",
+      "azure-observability",
+      "analyze-test-run",
+      "file-test-bug",
+      "sensei",
+      "azure-rbac",
+      "skill-authoring",
+      "azure-hosted-copilot-sdk",
+      "azure-postgres",
+      "markdown-token-optimizer"
+    ],
+    "neondatabase/agent-skills": [
+      "claimable-postgres"
+    ],
+    "lllllllama/rigorpilot-skills": [
+      "ai-paper-reproduction"
+    ],
+    "higgsfield-ai/skills": [
+      "higgsfield-game-generation"
+    ],
+    "larksuite/cli": [
+      "lark-minutes",
+      "lark-vc",
+      "lark-vc-agent"
+    ],
+    "coreyhaines31/marketingskills": [
+      "ab-test-setup",
+      "form-cro",
+      "competitor-alternatives",
+      "page-cro",
+      "aso-audit",
+      "paywall-upgrade-cro",
+      "popup-cro",
+      "paid-ads",
+      "referral-program"
+    ],
+    "firebase/agent-skills": [
+      "firebase-local-env-setup",
+      "developing-genkit-python",
+      "developing-genkit-go",
+      "firestore-security-rules-auditor",
+      "developing-genkit-js",
+      "developing-genkit-dart"
+    ],
+    "sentry/dev": [
+      "sentry-cli"
+    ],
+    "cloudflare/skills": [
+      "sandbox-sdk"
+    ],
+    "convex/agent-skills": [
+      "components-guide",
+      "function-creator",
+      "schema-builder"
+    ],
+    "pbakaus/impeccable": [
+      "arrange",
+      "frontend-design",
+      "animate",
+      "clarify",
+      "distill",
+      "extract",
+      "critique",
+      "bolder",
+      "layout",
+      "typeset",
+      "normalize",
+      "colorize",
+      "onboard",
+      "optimize",
+      "adapt",
+      "polish",
+      "overdrive",
+      "harden",
+      "quieter",
+      "delight",
+      "shape"
+    ],
+    "googleworkspace/cli": [
+      "gws-apps-script-push",
+      "gws-alertcenter",
+      "gws-groupssettings",
+      "recipe-batch-reply-to-emails",
+      "recipe-deploy-apps-script",
+      "recipe-transfer-file-ownership",
+      "gws-reseller",
+      "recipe-batch-rename-files",
+      "recipe-audit-external-sharing",
+      "gws-licensing",
+      "gws-apps-script",
+      "recipe-send-personalized-emails",
+      "recipe-search-and-export-emails",
+      "recipe-cancel-and-notify",
+      "recipe-triage-security-alerts",
+      "gws-vault",
+      "gws-cloudidentity"
+    ],
+    "degausai/wonda": [
+      "wonda-cli"
+    ],
+    "expo/skills": [
+      "building-native-ui",
+      "use-dom",
+      "expo-skill-feedback",
+      "expo-api-routes",
+      "upgrading-expo",
+      "expo-deployment",
+      "expo-tailwind-setup",
+      "native-data-fetching",
+      "expo-observe",
+      "expo-cicd-workflows",
+      "add-app-clip"
+    ],
+    "momentic-ai/skills": [
+      "momentic-mobile-test",
+      "momentic-explore-prompt",
+      "momentic-result-classification"
+    ],
+    "google-labs-code/stitch-skills": [
+      "stitch-design"
+    ],
+    "anthropics/claude-code": [
+      "hook-development",
+      "command-development",
+      "plugin-structure",
+      "frontend-design",
+      "mcp-integration",
+      "plugin-settings",
+      "claude-opus-4-5-migration",
+      "agent-development",
+      "writing-hookify-rules",
+      "skill-development"
+    ],
+    "useosint/skills": [
+      "exif-metadata-analysis",
+      "sockpuppet-opsec",
+      "corporate-registries",
+      "whois-dns-recon",
+      "media-verification",
+      "shodan-censys-recon",
+      "google-dorking",
+      "osint-report",
+      "email-osint",
+      "paste-forum-monitoring",
+      "company-osint",
+      "github-git-recon",
+      "crypto-blockchain-tracing",
+      "username-osint",
+      "chronolocation",
+      "certificate-transparency",
+      "osint-investigation",
+      "people-search-engines",
+      "person-osint",
+      "link-analysis-graphing",
+      "breach-data-analysis",
+      "geoint-photo",
+      "wayback-archives",
+      "reverse-image-search",
+      "social-media-osint",
+      "phone-osint",
+      "flight-vessel-tracking",
+      "domain-osint"
+    ],
+    "binance/binance-skills-hub": [
+      "simple-earn",
+      "assets",
+      "algo",
+      "vip-loan",
+      "margin-trading",
+      "sub-account",
+      "derivatives-trading-portfolio-margin",
+      "derivatives-trading-coin-futures",
+      "derivatives-trading-usds-futures",
+      "derivatives-trading-portfolio-margin-pro",
+      "convert",
+      "alpha",
+      "spot",
+      "derivatives-trading-options"
+    ],
+    "axelfreeman/marketing-mindset": [
+      "marketing-mindset"
+    ],
+    "jakubkrehel/skills": [
+      "teardown",
+      "technical-drawing"
+    ],
+    "antfu/skills": [
+      "turborepo",
+      "tsdown",
+      "web-design-guidelines",
+      "vueuse-functions",
+      "slidev",
+      "vue-testing-best-practices",
+      "vue-best-practices",
+      "vue-router-best-practices"
+    ],
+    "flutter/agent-plugins": [
+      "flutter-building-layouts",
+      "flutter-platform-views",
+      "flutter-animation",
+      "flutter-environment-setup-linux",
+      "flutter-setting-up-on-windows",
+      "flutter-managing-state",
+      "flutter-architecture",
+      "flutter-reducing-app-size",
+      "flutter-native-interop",
+      "flutter-building-plugins",
+      "flutter-interoperating-with-native-apis",
+      "flutter-caching-data",
+      "flutter-accessibility-audit",
+      "flutter-plugins",
+      "flutter-concurrency",
+      "flutter-setting-up-on-linux",
+      "flutter-performance",
+      "flutter-layout",
+      "flutter-improving-accessibility",
+      "flutter-handling-http-and-json",
+      "flutter-localizing-apps",
+      "flutter-http-and-json",
+      "flutter-accessibility",
+      "flutter-setting-up-on-macos",
+      "flutter-implementing-navigation-and-routing",
+      "flutter-working-with-databases",
+      "flutter-home-screen-widget",
+      "flutter-adding-home-screen-widgets",
+      "flutter-embedding-native-views",
+      "flutter-theming-apps",
+      "flutter-routing-and-navigation",
+      "flutter-environment-setup-windows",
+      "flutter-animating-apps",
+      "flutter-state-management",
+      "flutter-localization",
+      "flutter-architecting-apps",
+      "flutter-theming",
+      "flutter-caching",
+      "flutter-handling-concurrency",
+      "flutter-databases",
+      "flutter-environment-setup-macos",
+      "flutter-building-forms",
+      "flutter-app-size",
+      "flutter-testing-apps",
+      "flutter-testing"
+    ],
+    "vuejs-ai/skills": [
+      "vue-development-guides"
+    ],
+    "tavily-ai/skills": [
+      "tavily-extract"
+    ],
+    "caffeinelabs/skills": [
+      "extension-posting-to-x",
+      "extension-data-viewer"
+    ],
+    "jimliu/baoyu-skills": [
+      "baoyu-imagine",
+      "baoyu-image-cards"
+    ],
+    "dontbesilent2025/dbskill": [
+      "dbs-slowisfast",
+      "dbs-agent-migration",
+      "dbs-xhs-title",
+      "dbs-bridge",
+      "dbs-skill-cleaner",
+      "dbskill-upgrade",
+      "dbs-unblock",
+      "dbs-hook"
+    ],
+    "google-gemini/gemini-skills": [
+      "gemini-interactions-api",
+      "vertex-ai-api-dev"
+    ],
+    "stripe/link-cli": [
+      "link-cli"
+    ],
+    "wecomteam/wecom-cli": [
+      "wecomcli-get-msg",
+      "wecomcli-edit-todo",
+      "wecomcli-edit-meeting",
+      "wecomcli-lookup-contact",
+      "wecomcli-create-meeting",
+      "wecomcli-schedule",
+      "wecomcli-get-todo-list",
+      "wecomcli-get-todo-detail",
+      "wecomcli-msg",
+      "wecomcli-manage-doc",
+      "wecomcli-manage-smartsheet-data",
+      "wecomcli-get-meeting",
+      "wecomcli-manage-schedule",
+      "wecomcli-manage-smartsheet-schema"
+    ],
+    "aaron-he-zhu/seo-geo-claude-skills": [
+      "schema-markup-generator",
+      "geo-content-optimizer",
+      "seo-content-writer",
+      "meta-tags-optimizer"
+    ],
+    "software-mansion/argent": [
+      "argent-create-flow",
+      "argent-qa-flows",
+      "argent-vega"
+    ],
+    "getsentry/skills": [
+      "create-pr",
+      "replay-ux-research"
+    ],
+    "clickhouse/agent-skills": [
+      "clickhousectl-cloud-deploy",
+      "clickhousectl-local-dev"
+    ],
+    "giuseppe-trisciuoglio/developer-kit": [
+      "specs-explore",
+      "constitution",
+      "ralph-loop",
+      "knowledge-graph",
+      "create-pr-from-spec",
+      "brainstorm-prompt-optimizer",
+      "specs-code-cleanup",
+      "specs-e2e-verification",
+      "sdd-init"
+    ],
+    "okx/onchainos-skills": [
+      "okx-growth-competition",
+      "okx-dex-token",
+      "okx-dex-social",
+      "okx-activity",
+      "okx-dex-ws",
+      "okx-wallet-portfolio",
+      "okx-dex-signal",
+      "okx-dex-strategy",
+      "okx-agent-identity",
+      "okx-security",
+      "okx-agent-chat",
+      "okx-x402-payment",
+      "okx-task-watch",
+      "okx-how-to-play",
+      "okx-onchain-gateway",
+      "okx-audit-log",
+      "okx-a2a-payment",
+      "okx-agent-task",
+      "okx-dex-swap",
+      "okx-dex-trenches",
+      "okx-dex-bridge"
+    ],
+    "jackwener/opencli": [
+      "opencli-sitemap-author",
+      "opencli-oneshot",
+      "opencli-operate",
+      "opencli-repair",
+      "opencli-explorer"
+    ],
+    "brianlovin/agent-config": [
+      "agent-browser",
+      "bun",
+      "chrome-webstore-release-blueprint",
+      "deslop",
+      "favicon",
+      "find-skills",
+      "fix-sentry-issues",
+      "grill-me",
+      "knip",
+      "playwriter",
+      "rams",
+      "react-doctor",
+      "reclaude",
+      "sentry",
+      "simplify",
+      "skill-creator",
+      "tdd",
+      "workflow"
+    ],
+    "pilioai/skills": [
+      "nano-banana-2"
+    ],
+    "callstack/agent-device": [
+      "react-devtools"
+    ],
+    "langchain-ai/langchain-skills": [
+      "langgraph-human-in-the-loop",
+      "langgraph-persistence",
+      "langchain-fundamentals",
+      "langchain-dependencies",
+      "deep-agents-memory",
+      "swarm",
+      "langchain-typescript-quickstart",
+      "deep-agents-core",
+      "langgraph-decision-models",
+      "deep-agents-orchestration",
+      "langgraph-python-quickstart",
+      "langsmith-online-eval-engineering",
+      "langchain-rag",
+      "ecosystem-primer",
+      "deepagents-typescript-quickstart",
+      "managed-deep-agents",
+      "framework-selection",
+      "langchain-middleware",
+      "langgraph-fundamentals",
+      "langchain-python-quickstart",
+      "langgraph-cli",
+      "langgraph-typescript-quickstart",
+      "deepagents-python-quickstart"
+    ],
+    "price-win/pricewin-skills-hub": [
+      "pricewin-deal-finder"
+    ],
+    "tw93/waza": [
+      "design"
+    ],
+    "google/skills": [
+      "ima-sdk-basics",
+      "gemini-managed-agents-api",
+      "bigquery-slot-cost-optimizer",
+      "google-cloud-recipe-networking-observability",
+      "gke-security",
+      "gke-tpu-metrics-monitoring",
+      "iam-recommendations-fetcher",
+      "gke-scaling"
+    ],
+    "anthropics/claude-plugins-official": [
+      "stripe-best-practices"
+    ],
+    "bmad-code-org/bmad-method": [
+      "bmod-founder"
+    ],
+    "claude-office-skills/skills": [
+      "skill-name"
+    ],
+    "apify/agent-skills": [
+      "apify-lead-generation",
+      "apify-content-analytics",
+      "apify-audience-analysis",
+      "apify-trend-analysis",
+      "apify-influencer-discovery",
+      "apify-competitor-intelligence",
+      "apify-market-research",
+      "apify-brand-reputation-monitoring",
+      "apify-sdk-integration",
+      "apify-ecommerce"
+    ],
+    "gargantuax/openskills": [
+      "gpt-image-2",
+      "nanobanana"
+    ],
+    "heygen-com/hyperframes": [
+      "graphic-overlays",
+      "waapi",
+      "pr-to-video",
+      "product-launch-video",
+      "tailwind",
+      "website-to-video",
+      "typegpu",
+      "gsap",
+      "animejs",
+      "lottie",
+      "faceless-explainer",
+      "three",
+      "contribute-catalog",
+      "talking-head-recut",
+      "music-to-video",
+      "embedded-captions",
+      "general-video",
+      "motion-graphics",
+      "css-animations"
+    ],
+    "earthtojake/text-to-cad": [
+      "urdf",
+      "srdf",
+      "bambu-labs",
+      "dxf",
+      "sdf",
+      "dfam-check",
+      "gcode",
+      "step-parts",
+      "dfm",
+      "implicit-cad",
+      "cad-viewer"
+    ],
+    "digitalsamba/claude-code-video-toolkit": [
+      "frontend-design"
+    ],
+    "anthropics/knowledge-work-plugins": [
+      "crm-cleanup",
+      "quarterly-review",
+      "customer-pulse",
+      "interactive-dashboard-builder",
+      "customer-pulse-check",
+      "run-campaign",
+      "crm-maintenance",
+      "price-check",
+      "handle-complaint",
+      "month-heads-up"
+    ],
+    "openai/skills": [
+      "slides",
+      "spreadsheet",
+      "develop-web-game",
+      "frontend-skill",
+      "sora"
+    ],
+    "github/awesome-copilot": [
+      "model-recommendation",
+      "suggest-awesome-github-copilot-prompts",
+      "gh-cli",
+      "polyglot-test-agent",
+      "make-skill-template",
+      "create-github-pull-request-from-specification",
+      "my-pull-requests",
+      "create-web-form",
+      "mcp-configure",
+      "web-coder",
+      "csharp-mcp-server-generator",
+      "my-issues",
+      "winapp-cli",
+      "prompt-builder"
+    ],
+    "nomadamas/k-skill": [
+      "naver-shopping-search",
+      "blue-ribbon-nearby",
+      "ktx-booking",
+      "lovebug-report",
+      "hipass-receipt",
+      "catchtable-sniper",
+      "used-car-price-search",
+      "srt-booking",
+      "gangnamunni-clinic-search",
+      "toss-securities",
+      "local-election-candidate-search",
+      "yebigun-training"
+    ],
+    "yusukebe/hono-skill": [
+      "hono"
+    ],
+    "sugarforever/01coder-agent-skills": [
+      "china-stock-analysis"
+    ],
+    "heroui-inc/heroui": [
+      "heroui-react",
+      "heroui-native",
+      "heroui-migration"
+    ],
+    "affaan-m/ecc": [
+      "ito-market-intelligence",
+      "everything-claude-code",
+      "ito-trade-planner",
+      "ito-basket-compare",
+      "motion-ui",
+      "everything-claude-code-conventions",
+      "claude-api",
+      "ito-data-atlas-agent"
+    ],
+    "mblode/agent-skills": [
+      "ui-audit",
+      "optimise-seo",
+      "readme-creator",
+      "docs-writing"
+    ],
+    "brightdata/skills": [
+      "bright-data-best-practices",
+      "seo-audit"
+    ],
+    "okx/agent-skills": [
+      "okx-outcomes",
+      "earn-hunter"
+    ],
+    "rivet-dev/skills": [
+      "rivetkit-client-swiftui",
+      "live-cursors",
+      "per-tenant-database",
+      "ai-agent",
+      "collaborative-text-editor",
+      "chat-room",
+      "ai-agent-workspace",
+      "rivetkit-client-swift",
+      "vpc-air-gapped",
+      "rivetkit-client-rust",
+      "cron-jobs",
+      "rivetkit-client-react",
+      "rivetkit",
+      "multiplayer-game",
+      "rivetkit-client-javascript"
+    ],
+    "getsentry/sentry-for-ai": [
+      "sentry-feature-setup",
+      "sentry-pr-code-review",
+      "sentry-workflow",
+      "sentry-code-review"
+    ],
+    "trailofbits/skills": [
+      "seatbelt-sandboxer",
+      "designing-workflow-skills",
+      "debug-buttercup",
+      "ask-questions-if-underspecified",
+      "claude-in-chrome-troubleshooting",
+      "insecure-defaults",
+      "git-cleanup"
+    ],
+    "upstash/context7": [
+      "documentation-lookup"
+    ],
+    "unity-technologies/skills": [
+      "tilemap-ruletile-createfromsegment",
+      "tilemap-ruletile-createempty",
+      "localization",
+      "physics-3d-collision",
+      "tilemap-palette-create"
+    ],
+    "figma/mcp-server-guide": [
+      "figma-create-design-system-rules",
+      "figma-implement-design",
+      "implement-design",
+      "create-design-system-rules",
+      "code-connect-components"
+    ],
+    "starchild-ai-agent/official-skills": [
+      "coder",
+      "preview-dev",
+      "skillmarketplace"
+    ],
+    "aws/agent-toolkit-for-aws": [
+      "creating-ec2-image-builder-pipeline",
+      "networkfirewall"
+    ],
+    "pskoett/self-improving-agent": [
+      "self-improvement"
+    ],
+    "railwayapp/railway-skills": [
+      "service",
+      "railway-docs",
+      "deploy",
+      "templates",
+      "environment",
+      "domain",
+      "new",
+      "deployment",
+      "database",
+      "central-station",
+      "metrics",
+      "status",
+      "projects"
+    ],
+    "langgenius/dify": [
+      "web-design-guidelines",
+      "skill-creator",
+      "frontend-code-review",
+      "component-refactoring",
+      "orpc-contract-first",
+      "vercel-react-best-practices"
+    ],
+    "agents365-ai/365-skills": [
+      "creating-mermaid-diagrams",
+      "drawio-skill",
+      "video-podcast-maker"
+    ],
+    "onmax/nuxt-skills": [
+      "pnpm",
+      "tresjs",
+      "motion",
+      "tsdown",
+      "ts-library",
+      "writing-web-documentation",
+      "phaser-best-practices",
+      "document-writer"
+    ],
+    "fetcher-sh/fetcher-skills": [
+      "x-scraper",
+      "instagram-scraper",
+      "tiktok-scraper"
+    ],
+    "datadog-labs/agent-skills": [
+      "agent-skills"
+    ],
+    "bencium/bencium-marketplace": [
+      "organic-first-campaign"
+    ],
+    "amelnagdy/delegate-skills": [
+      "codex-background"
+    ],
+    "every-app/open-seo": [
+      "maintain-greptile-rules"
+    ],
+    "jsmastery-pro/skills": [
+      "remember",
+      "recover",
+      "review",
+      "imprint"
+    ],
+    "shubhamsaboo/awesome-llm-apps": [
+      "python-expert",
+      "ux-designer",
+      "debugger",
+      "fullstack-developer",
+      "code-reviewer",
+      "meeting-notes",
+      "editor",
+      "academic-researcher",
+      "decision-helper",
+      "strategy-advisor",
+      "deep-research",
+      "data-analyst",
+      "content-writer",
+      "email-drafter",
+      "project-planner",
+      "fact-checker",
+      "content-creator",
+      "visualization-expert",
+      "technical-writer",
+      "sprint-planner"
+    ],
+    "lijigang/ljg-skills": [
+      "ljg-plain",
+      "ljg-travel",
+      "ljg-library",
+      "ljg-skill-map",
+      "fix-ljg-org-to-md"
+    ],
+    "vinvcn/mattpocock-skills-zh-cn": [
+      "ubiquitous-language",
+      "resolving-merge-conflicts",
+      "request-refactor-plan",
+      "caveman",
+      "zoom-out",
+      "qa",
+      "to-issues",
+      "to-prd",
+      "write-a-skill",
+      "edit-article",
+      "obsidian-vault",
+      "design-an-interface",
+      "writing-great-skills",
+      "diagnose"
+    ],
+    "jimliu/open-artifacts": [
+      "baoyu-design",
+      "claude-dashboard",
+      "claude-design",
+      "claude-design-system",
+      "claude-slides",
+      "dataviz",
+      "release-skills"
+    ],
+    "dotnet/skills": [
+      "mcp-csharp-publish",
+      "mcp-csharp-test",
+      "mcp-csharp-debug",
+      "mcp-csharp-create",
+      "minimal-api-file-upload",
+      "configuring-opentelemetry-dotnet"
+    ],
+    "api/git": [
+      "agent-memory",
+      "auto-deploy",
+      "drawio",
+      "etest-ai-testcase-runner",
+      "etest-testcase-generate",
+      "fireworks-tech-graph",
+      "generate-design-doc",
+      "md-doc-uploader",
+      "music-auth",
+      "music-config",
+      "mws-shared",
+      "preview-design-doc",
+      "skill-creator",
+      "vip-arthas-agent",
+      "vip-code-review",
+      "vip-knowledge-inject",
+      "vip-test-bind",
+      "vip-test-executor",
+      "vip-test-plan"
+    ],
+    "samber/cc-skills": [
+      "linkedin-ghostwriter"
+    ],
+    "dagster-io/skills": [
+      "dignified-python"
+    ],
+    "antvis/chart-visualization-skills": [
+      "antv-s2-expert",
+      "narrative-text-visualization",
+      "infographic-creator",
+      "antv-skills-maintainer"
+    ],
+    "minimax-ai/skills": [
+      "mmx-cli"
+    ],
+    "unovue/shadcn-vue": [
+      "shadcn-vue"
+    ],
+    "coralogix/cx-cli": [
+      "cx-incident-management"
+    ]
+  },
+  "qoder_failed_sample": [],
+  "failed_repos_sample": [
+    "sentry/dev",
+    "degausai/wonda",
+    "axelfreeman/marketing-mindset",
+    "brianlovin/agent-config",
+    "gargantuax/openskills",
+    "jimliu/open-artifacts",
+    "api/git",
+    "kimny1143/claude-code-template",
+    "cosscom/coss",
+    "shajith003/awesome-claude-skills",
+    "iamzhihuix/happy-claude-skills",
+    "sophieguanongit/openclaw-browser-automation",
+    "equinor/fusion-skills",
+    "luoluoluo22/jianying-editor-skill",
+    "endigo/claude-skills",
+    "styleof/superpowers",
+    "jackwener/wx-cli",
+    "404kidwiz/claude-supercode-skills",
+    "4ier/notion-cli",
+    "mhagrelius/dotfiles",
+    "alphaonedev/openclaw-graph",
+    "nymbo/skills",
+    "vasilyu1983/ai-agents-public",
+    "buluslan/ecommerce-competitor-analyzer",
+    "newliver666/apk-reverse",
+    "mosaic/ai",
+    "ruchernchong/claude-kit",
+    "gitlab-org/ai",
+    "fearovex-labs/agent-config",
+    "cygnusfear/agent-skills",
+    "moxa/sw",
+    "dengineproblem/agents-monorepo",
+    "serpdownloaders/skills",
+    "aidotnet/moyucode",
+    "kaitoinfra/twitterapi-io",
+    "mkshahzad77/claude-skill-strapi-expert",
+    "mann1988/awesome-claude-skills",
+    "jk-0001/skills",
+    "heyvhuang/ship-faster",
+    "timschoch/skilly",
+    "tasteskill/tasteskill",
+    "camacho/ai-skills",
+    "janjaszczak/cursor",
+    "continuedev/skills",
+    "jsolly/agent-skills",
+    "cloudsen/eliteforge-skills",
+    "scientiacapital/skills",
+    "claude-office-skills/skills/facebook",
+    "claude-office-skills/skills/twitter",
+    "gmh5225/awesome-game-security"
+  ]
+}

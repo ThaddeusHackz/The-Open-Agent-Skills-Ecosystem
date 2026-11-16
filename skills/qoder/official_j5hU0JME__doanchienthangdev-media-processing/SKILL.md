@@ -1,0 +1,214 @@
+---
+name: Processing Media
+description: Processes audio and video with ffmpeg including transcoding, streaming, and batch operations. Use when building video pipelines, converting formats, generating thumbnails, or implementing HLS/DASH streaming.
+category: tools
+triggers:
+  - media processing
+  - ffmpeg
+  - video transcoding
+  - audio processing
+  - video editing
+  - media conversion
+  - streaming
+---
+
+# Processing Media
+
+## Quick Start
+
+```typescript
+import ffmpeg from 'fluent-ffmpeg';
+import { path as ffmpegPath } from '@ffmpeg-installer/ffmpeg';
+
+ffmpeg.setFfmpegPath(ffmpegPath);
+
+// Transcode video to web-optimized MP4
+async function transcodeVideo(inputPath: string, outputPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .videoCodec('libx264')
+      .audioCodec('aac')
+      .size('1280x720')
+      .outputOptions(['-preset medium', '-movflags +faststart'])
+      .on('end', resolve)
+      .on('error', reject)
+      .save(outputPath);
+  });
+}
+
+// Generate thumbnail at specific timestamp
+async function generateThumbnail(videoPath: string, outputPath: string, timestamp: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    ffmpeg(videoPath)
+      .screenshots({ timestamps: [timestamp], filename: 'thumb.jpg', folder: outputPath, size: '320x180' })
+      .on('end', resolve)
+      .on('error', reject);
+  });
+}
+
+// Extract audio from video
+async function extractAudio(videoPath: string, audioPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    ffmpeg(videoPath)
+      .audioCodec('libmp3lame')
+      .audioBitrate('192k')
+      .on('end', resolve)
+      .on('error', reject)
+      .save(audioPath);
+  });
+}
+```
+
+## Features
+
+| Feature | Description | Guide |
+|---------|-------------|-------|
+| Video Transcoding | Convert between formats (MP4, WebM, MOV) | Use libx264/libx265 for H.264/H.265 encoding |
+| Resolution Scaling | Resize videos to target resolutions | Use size() with aspect ratio preservation |
+| Thumbnail Generation | Create preview images from videos | Use screenshots() with timestamps |
+| Audio Extraction | Extract audio tracks from video files | Use audioCodec() without video output |
+| Audio Processing | Convert, normalize, and merge audio | Use audioFilters() for normalization |
+| HLS Streaming | Generate adaptive bitrate streams | Create multi-quality variants with m3u8 playlists |
+| DASH Streaming | MPEG-DASH manifest generation | Use -f dash with segment configuration |
+| Batch Processing | Process multiple files concurrently | Use p-queue for controlled parallelism |
+| Progress Tracking | Monitor transcoding progress | Listen to 'progress' events |
+| Metadata Extraction | Read video/audio metadata | Use ffprobe for duration, resolution, codec info |
+
+## Common Patterns
+
+### HLS Adaptive Streaming
+
+```typescript
+const QUALITIES = [
+  { name: '1080p', resolution: '1920x1080', bitrate: '5000k' },
+  { name: '720p', resolution: '1280x720', bitrate: '2500k' },
+  { name: '480p', resolution: '854x480', bitrate: '1000k' },
+];
+
+async function generateHLS(inputPath: string, outputDir: string): Promise<string> {
+  for (const quality of QUALITIES) {
+    const qualityDir = path.join(outputDir, quality.name);
+    await fs.mkdir(qualityDir, { recursive: true });
+
+    await new Promise<void>((resolve, reject) => {
+      ffmpeg(inputPath)
+        .videoCodec('libx264')
+        .size(quality.resolution)
+        .videoBitrate(quality.bitrate)
+        .outputOptions(['-hls_time 6', '-hls_playlist_type vod', '-f hls'])
+        .on('end', resolve)
+        .on('error', reject)
+        .save(path.join(qualityDir, 'playlist.m3u8'));
+    });
+  }
+
+  // Generate master playlist
+  const master = '#EXTM3U\n' + QUALITIES.map(q =>
+    `#EXT-X-STREAM-INF:BANDWIDTH=${parseInt(q.bitrate) * 1000}\n${q.name}/playlist.m3u8`
+  ).join('\n');
+  await fs.writeFile(path.join(outputDir, 'master.m3u8'), master);
+  return path.join(outputDir, 'master.m3u8');
+}
+```
+
+### Video Upload Processing Pipeline
+
+```typescript
+async function processVideoUpload(inputPath: string, videoId: string): Promise<VideoAssets> {
+  const outputDir = path.join(MEDIA_DIR, videoId);
+  await fs.mkdir(outputDir, { recursive: true });
+
+  // Get metadata
+  const metadata = await getVideoMetadata(inputPath);
+
+  // Generate thumbnails
+  const thumbnails = await generateThumbnails(inputPath, path.join(outputDir, 'thumbs'), 10);
+
+  // Transcode to web format
+  await transcodeVideo(inputPath, path.join(outputDir, 'video.mp4'));
+
+  // Generate HLS for streaming
+  const streamUrl = await generateHLS(inputPath, path.join(outputDir, 'hls'));
+
+  return { metadata, thumbnails, videoUrl: `/media/${videoId}/video.mp4`, streamUrl };
+}
+```
+
+### Audio Normalization and Merge
+
+```typescript
+async function normalizeAndMerge(tracks: string[], outputPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let command = ffmpeg();
+    tracks.forEach(track => { command = command.input(track); });
+
+    const filterInputs = tracks.map((_, i) => `[${i}:a]`).join('');
+    command
+      .complexFilter(`${filterInputs}concat=n=${tracks.length}:v=0:a=1,loudnorm=I=-16:TP=-1.5[out]`)
+      .outputOptions(['-map', '[out]'])
+      .on('end', resolve)
+      .on('error', reject)
+      .save(outputPath);
+  });
+}
+```
+
+### Batch Processing with Progress
+
+```typescript
+import PQueue from 'p-queue';
+
+async function batchTranscode(
+  files: string[],
+  outputDir: string,
+  onProgress?: (completed: number, total: number) => void
+): Promise<BatchResult[]> {
+  const queue = new PQueue({ concurrency: 2 });
+  const results: BatchResult[] = [];
+  let completed = 0;
+
+  for (const file of files) {
+    queue.add(async () => {
+      const outputPath = path.join(outputDir, `${path.basename(file, path.extname(file))}.mp4`);
+      try {
+        await transcodeVideo(file, outputPath);
+        results.push({ file, success: true, outputPath });
+      } catch (error) {
+        results.push({ file, success: false, error: error.message });
+      }
+      completed++;
+      onProgress?.(completed, files.length);
+    });
+  }
+
+  await queue.onIdle();
+  return results;
+}
+```
+
+## Best Practices
+
+| Do | Avoid |
+|----|-------|
+| Enable hardware acceleration (NVENC/VAAPI) when available | Using software encoding on capable hardware |
+| Implement progress tracking for long operations | Running transcodes without user feedback |
+| Use streaming for large file processing | Loading entire videos into memory |
+| Set reasonable timeouts for processing | Allowing indefinite process hangs |
+| Validate input formats before processing | Processing arbitrary untrusted files |
+| Clean up temporary files after processing | Leaving temp files on disk |
+| Use -movflags +faststart for web videos | Serving videos without fast-start optimization |
+| Limit concurrent processing based on resources | Running unlimited parallel transcodes |
+| Handle ffmpeg exit codes properly | Ignoring process errors |
+| Set explicit output formats | Relying on auto-detection |
+
+## Related Skills
+
+- **image-processing** - Image manipulation with Sharp
+- **document-processing** - Office document handling
+
+## References
+
+- [FFmpeg Documentation](https://ffmpeg.org/documentation.html)
+- [fluent-ffmpeg](https://github.com/fluent-ffmpeg/node-fluent-ffmpeg)
+- [HLS Specification](https://datatracker.ietf.org/doc/html/rfc8216)
+- [DASH Specification](https://dashif.org/docs/DASH-IF-IOP-v4.3.pdf)

@@ -1,0 +1,684 @@
+---
+name: merge-test
+description: "워크트리 브랜치를 main에 머지하고 T4/T5 통합테스트를 실행 + 완료처리까지 일괄 실행. /implement 완료 후 호출."
+triggers: ["머지 테스트", "merge-test", "머지후테스트", "통합테스트", "merge test"]
+---
+
+
+
+<!-- script-contract-invariant -->
+## Script Contract Invariant
+
+Preflight and cleanup evidence must come from helper CLI contracts before any merge mutation. Discover helpers in order: repo-local `common\tools`, then wtools canonical helper surface `D:\work\project\service\wtools\common\tools`. Use `merge-test-preflight.ps1 -PlanFile <plan> -RepoRoot <repo> -Json` for pending merge, branch/worktree, dirty, and service-lock evidence. Use `merge-test-cleanup.ps1 -PlanFile <plan> -RepoRoot <repo> -Json` for post-merge cleanup evidence. A downstream repo-local `common\tools` absence is not `helper_unavailable` while the wtools canonical helper is discoverable. Only after canonical helper discovery fails, record `helper_unavailable` and use the direct read-back checklist. AI owns the merge/abort decision.
+> Routing gate: branch/worktree present -> /merge-test; absent -> /done
+# 머지 후 통합테스트 게이트
+
+> **본문 분리 원칙**: 호출 컨텍스트가 다르면 본문도 다르다. 공유 레시피는 [`_recipes.md`](./_recipes.md)로만.
+
+`/implement`로 worktree에서 구현 완료 후, main에 머지하고 T4/T5 통합테스트를 실행하고 완료처리(archive + 문서정리 + 커밋)까지 일괄 실행합니다.
+
+## Skill Path Precedence
+
+- 사용자가 `[$merge-test](...SKILL.md)` 또는 파일시스템 경로로 local/project skill 파일을 명시한 경우, 반드시 그 exact file을 Read 기준으로 삼는다.
+- 같은 name의 global/duplicate skill(`C:\Users\Narang\.codex\skills\merge-test\SKILL.md` 등)은 대체 사용하지 않는다.
+- 명시 경로가 없거나 읽기 실패한 경우에만 fallback 후보를 검토하며, fallback 사용 전에는 실제로 읽을 경로와 이유를 사용자에게 먼저 보고한다.
+
+## Routing Gate Summary
+
+- Gate: `branch/worktree present -> /merge-test; absent -> /done`
+- plan 헤더에 `> branch:` 또는 `> worktree:`가 있으면 `/merge-test`가 우선 owner다.
+- plan 헤더에 두 필드가 모두 없으면 `/merge-test`를 우회하고 `/done`을 직접 실행한다.
+- 이 기준은 `/implement`의 완료 후 owner 선택 및 `/done`의 branch/worktree 차단 게이트와 같은 계약이다.
+
+## Blocker Classification Contract
+
+- `merge-test-preflight.ps1 -Json`의 `blocker_type`, `local_merge_possible`, `remote_diverged`, `push_blocked`, `direct_root_commit_blocked`, `failed_command`, `failed_exit_code`, `failed_stderr_excerpt`를 읽기 전에는 `머지 막힘`, `merge blocked`, `blocked`로 local merge 실패를 선언하지 않는다.
+- `remote_diverged=true`는 remote sync/push 위험이다. 이 값만으로 `local_merge_blocked`로 승격하지 않고, `push_blocked` 또는 `remote_sync_blocked`와 함께 보고한다.
+- root 직접 커밋 guard 실패는 `direct_root_commit_blocked`로 보고한다. `local_merge_possible=true`이면 merge worktree fallback 또는 remote fast-forward receiver flow를 next owner로 남긴다.
+- final summary에는 `phase | blocker_type | local_merge_possible | remote_diverged | command | exit_code | next_owner` 컬럼을 포함한다.
+- 예시: `merge | push_blocked | true | true | git push origin main | 1 | remote_sync_owner`는 local merge 가능 + push blocked case이며, local merge blocker가 아니다.
+
+## 워크플로우 위치
+
+```
+/implement (worktree 구현 + T1/T2 단위테스트 + T3 재현/통합TC)
+  → /merge-test  ← 지금 여기 (머지 + T4/T5 + done 일괄 실행)
+```
+
+## Execute-Or-Continue Contract
+
+- 사용자가 `/merge-test`를 명시 호출한 경우 이 스킬은 다음 continuation action 중 하나로 진행한다:
+  1. `precondition 통과 -> merge 실행 -> T4/T5 -> done`
+  2. `precondition 경고 -> owner/target evidence 기록 -> retry 또는 resolve owner로 전환`
+  3. `merge conflict/pending merge -> conflict continuation ledger 기록 -> resolve-current 또는 resolve-foreign으로 전환`
+- `merge-test 완료`는 아래 3조건이 모두 충족된 경우에만 선언한다:
+  1. 실제 `git merge`가 실행되어 대상 branch가 main에 반영됨
+  2. plan에 존재하는 T4/T5가 계약에 맞게 실행됨
+  3. `/done` 후처리(archive/문서정리/커밋)가 완료됨
+- 첫 응답은 아래 3항목 형식을 따른다:
+  1. `precondition 검증 결과`: 통과/실패 + 이유
+  2. `merge target`: branch/worktree/parent plan 정보
+  3. `next action`: `merge`, `resolve-current`, `resolve-foreign`, `retry`, `done`
+- `next action`은 `merge|resolve-current|resolve-foreign|retry|done`만 허용한다. 추가 탐색, 상태 설명만 제공, 인접 스킬 단독 실행으로 대체하지 않는다.
+- `merge conflict`는 final hard stop이 아니라 conflict continuation이다. root merge가 충돌하면 root를 clean state로 되돌리고 current/foreign owner를 분류해 owner worktree에서 resolve iteration을 만든다.
+- `PENDING_MERGE_DETECTED`는 final abort가 아니라 owner classification gate다. `MERGE_HEAD`, unmerged paths, current branch, owner guess, retry command를 기록한 뒤 `resolve-current`, `resolve-foreign`, `retry` 중 하나로 라우팅한다.
+- **금지된 대체 행동**:
+  - precondition 판정 전에 unrelated 테스트, 로그 탐색, 커밋 히스토리 분석으로 턴을 소비하는 행동
+  - 머지 없이 파일 탐색/상태 설명만 반복하는 행동
+  - `done` 또는 `reflect`를 단독 수행해 `merge-test`를 우회하는 행동
+  - `git status`, branch list, 테스트 파일 목록 등 상태 요약만 반복하고 continuation action으로 진행하지 않는 행동
+
+`frontend verify(sync/check/build)`는 `/merge-test`가 sole owner다. implement는 코드 수정과 워크트리 단위 검증까지만 담당하고, 프론트엔드 verify 계열은 main 머지 후 여기서만 실행한다. Frontend 변경이 있으면 Tier 1 기본 gate로 `npm run check`를 실행한다. Tier 1은 SvelteKit sync, TypeScript, Svelte diagnostics를 빠르게 잡는 기본 검증이다. Tier 2 `npm run build:merge-test`는 `vite.config.*`, `svelte.config.*`, adapter/build script, `package.json`, lockfile, dependency/plugin 변경, `$env/static/*`, `$env/dynamic/*`, SSR import, browser-only import, route server module 변경, 직전 build 실패 이력, check 통과 후에도 번들/SSR 의심이 있을 때만 승격한다. build를 실행하지 않은 완료 보고는 `Tier 1 frontend validation 통과, Tier 2 조건 미충족`으로 기록한다.
+같은 frontend checkout에서는 `svelte-kit sync`, `npm run check`, `svelte-check`, `npm run build`, `vite build`를 절대 병렬 실행하지 않는다. 이 명령들은 `.svelte-kit` generated output을 공유하므로 항상 순차 실행한다.
+`.svelte-kit` 파일의 `EPERM`/`EBUSY`가 나오면 제품 실패로 단정하기 전에 같은 checkout의 check/build 병렬 실행 여부를 먼저 확인하고, 단독 재실행 명령과 결과를 target ledger에 남긴다.
+T4/T5 또는 frontend verify가 tool timeout으로 끊겼는데 partial summary가 보이면 성공으로 단정하지 않는다. `frontend-build budget timeout`, `timeout-budget`, partial summary, 더 긴 timeout 재실행 명령, 최종 exit code를 target ledger에 함께 기록한다. frontend build timeout 후에는 남은 Node/Vite 프로세스, `.svelte-kit-merge-test`, root dirty를 확인하고, 같은 build를 겹쳐 실행하지 않는다. `.svelte-kit-merge-test` 제거는 resolved absolute path가 대상 repo `frontend` 아래인지 확인한 뒤 수행한다. root `TODO.md` 같은 ledger 변동은 검증 부작용이면 커밋하지 않고 원복/보고한다.
+frontend verify 실패 로그가 Svelte compiler error 또는 Vite compile overlay이면 `file/line`, `compiler message`, `recurrence search seed`를 target ledger에 남긴다. `{@const}` placement 같은 compiler overlay는 source file과 helper function 이름으로 same pattern search를 수행하고, sibling `.svelte` hit와 found-but-not-changed 사유를 기록한다. source 수정이 필요하면 merge-test는 plan 상태를 `머지대기`로 유지/복구하고 `수정필요` continuation anchor에 source file, compiler message, recurrence search seed를 포함한다.
+`/merge-test`는 "모든 마무리" owner가 아니라, **실제 merge 결과·merged main tree·main 서비스 상태**를 입력으로 쓰는 단계만 owner다. 실제 merge, restart-api/restart, frontend verify, live T4/T5, Phase Z cleanup이 여기에 포함된다.
+bounded `safe-doc semantic merge`도 `/merge-test` owner action이지만, 허용 범위는 plans lineage ledger(`.worktrees/plans/TODO.md`, `.worktrees/plans/docs/DONE.md`)와 Markdown/Text docs-only conflict + dirty-preserve 조건 충족 케이스로 제한한다. repo root `TODO.md` 특례는 없다. mixed/code conflict는 root에서 닫지 않고 conflict continuation으로 owner worktree resolve에 넘긴다.
+
+LLM unsafe-code resolve가 `auto-conflict-resolver`로 성공하면 사용자 응답 대기 없이 후속 step으로 계속 진행한다. 이 경로는 차단형 리뷰 게이트가 아니며, merge commit subject는 `merge(llm-resolved):`로 시작하고 `LLM-Conflict-*` trailer를 포함해야 한다. 리뷰는 monitor-page tracking 화면의 `[LLM 머지 리뷰]` item에서 확인하며, tracking 등록이 환경변수/CLI 부재로 skip되면 `git log --grep='^merge(llm-resolved)'`와 `.merge_test/llm_resolutions/<commit_sha>.json` evidence가 fallback이다. tracking 실패는 WARN evidence일 뿐 merge-test 흐름을 차단하지 않는다.
+
+**T4/T5 실행 허용 조건 3축 (3가지 모두 충족해야 실행 가능):**
+1. **post-merge** — main에 머지 완료 이후
+2. **root-worktree** — 원본 main worktree (`.worktrees/*` 경로 제외)
+3. **main 브랜치** — `main` 브랜치 체크아웃 상태
+
+3축 중 하나라도 미충족이면 T4/T5 실행 금지. 이 조건은 스킬 실행 시작 시점에 확인하며, 조건 미충족 시 T4/T5 없이 종료하거나 조건 충족 후 재시도를 안내한다.
+
+## 세션 targets / continue 계약 (필수)
+
+- 사용자가 같은 세션에 plan 경로를 2개 이상 명시하면, 그 목록은 **session targets**로 고정한다.
+- 현재 target을 머지/테스트/완료처리 했더라도 **remaining targets**가 있으면 전체 완료로 말하지 않는다.
+  - 출력은 `현재 target 완료, 남은 target N개` 형태로 남기고, 다음 target 처리로 **같은 턴에서 계속** 진행한다.
+- 사용자가 `계속`, `멈추지마`, `끝날 때까지` 등으로 재지시한 경우:
+  - 중간 성공(머지 성공, T4/T5 통과, done 단계 완료)은 종료점이 아니라 **진행 업데이트**다.
+  - `merge conflict`, `PENDING_MERGE_DETECTED`, unmerged marker는 종료점이 아니라 resolve iteration으로 라우팅한다.
+  - "멈춤"이 허용되는 유일한 경우는 `사용자 명시 중단`, `데이터 손실 위험이 있는 destructive action 요구`, `필수 credential 부재`다.
+  - 위 경우에도 final 응답 전에 continuation ledger와 재개 명령을 남긴다.
+
+## 전제 조건 확인
+
+실행 전 다음 조건을 모두 확인한다:
+
+| # | 조건 | 실패 동작 |
+|---|------|----------|
+| 1 | plan 헤더에 `> branch:` 존재 | 없으면 → `/done` 직접 호출 |
+| 2 | plan 상태 `머지대기` | `구현중`(legacy)이면 경고+계속, 그 외 중단 |
+| 3 | 모든 구현 체크박스 `[x]` (T4/T5 제외) | 미완료 있으면 경고 후 계속 여부 확인 |
+| 4 | 루트 브랜치 `main` | 아니면 0단계 자동 전환 (실패 시 중단) |
+| 5 | worktree-owner 일치 | 불일치 시 중단 |
+| 6 | owner set 전원 `머지대기` 이상 | `OWNER_SET_NOT_READY` 중단 |
+| 7 | attached owner면 primary가 `구현완료` 이상 | `PRIMARY_MUST_MERGE_FIRST` 중단 |
+| 8 | 루트 pending merge 없음 (`git rev-parse --git-path MERGE_HEAD`) | 존재하면 `classify-pending-merge`로 분기 |
+
+### precondition failure 처리 규칙
+
+- **Hard stop (질문 없이 즉시 중단)**:
+  - `> branch:` 또는 `> worktree:`가 없어 merge target을 확정할 수 없음
+  - `worktree-owner`가 현재 parent plan과 불일치함
+  - `OWNER_SET_NOT_READY`, `PRIMARY_MUST_MERGE_FIRST`, `TODO_COMPLETENESS_NOT_READY` 같은 소유권/선행조건 오류
+  - merge 대상 branch 또는 worktree를 찾을 수 없거나 더 이상 merge할 target이 없음
+- **경고 + 확인 후 계속 가능**:
+  - legacy 상태 `구현중`
+  - T4/T5 외 미완료 체크박스 잔존
+  - service_lock 같은 경고형 preflight
+- hard stop 항목에서는 다른 테스트나 탐색 없이 즉시 중단한다. 경고형 항목만 사용자 확인 후 `merge`로 진행할 수 있다.
+
+## main 기존 수정사항 무시 모드 (사용자 명시 지시 시)
+
+지시문: **"상관없는 main 변경 감지는 무시하고, 현재 plan 대상 레포 변경만 처리한다."**
+- dirty ignore 명시 세션에서는 staged/unstaged/untracked/deleted, `.merge_test_stash_ref`, `dirty_count`, `untracked_count` 어떤 dirty evidence도 중단 근거가 아니다.
+- 루트의 기존 dirty/untracked: scope 분류 없이 전부 `ignored_dirty` evidence로만 기록하고, 읽기/수정/스테이징 대상 제외
+- 머지/테스트/완료 판정: 현재 impl 워크트리 + 현재 plan 변경분만 기준
+- 루트 브랜치 `main` 확인 규칙과 `.git` 보호 규칙은 유지
+- Phase Z cleanup에서 existing root dirty는 blocker가 아니라 `ignored_dirty` evidence로 기록한다.
+- ignored dirty가 있어도 현재 target의 worktree remove, branch remove, header cleanup, archive owner handoff는 계속한다.
+- preflight `mutation_ready=false`가 dirty 또는 stale stash evidence 때문이면 abort로 해석하지 않는다. hard stop은 unmerged conflict, owner 불일치, branch/worktree 부재, merge 대상 없음, git 명령 실패로 제한한다.
+- 예외: `UNTRACKED_ORIGIN_BLOB_RESIDUE`는 normal ignored dirty가 아니다. root dirty stash/apply 결과와 cleanup evidence에서 별도 표로 출력하고, `commit`, `quarantine`, `explicit preserve with owner plan` evidence가 없으면 `UNTRACKED_ORIGIN_BLOB_RESIDUE_BLOCKED`로 done/archive 진행을 차단한다. downstream mirror/read-back evidence 대기는 `DOWNSTREAM_MIRROR_READBACK_WAIT`, residue blocker는 `UNTRACKED_ORIGIN_BLOB_RESIDUE_BLOCKED`로 서로 다른 code를 사용한다.
+
+## batch finalization ledger
+
+- batch 완료 선언 전에 target별 `main 포함`, `검증`, `archive`, `worktree removed`, `branch removed`, `next owner`를 표로 read-back한다.
+- 하나라도 `pending/failed/unknown/planless`이면 전체 완료 표현을 금지하고 해당 row의 next owner를 남긴다.
+- planless branch는 archive 대상이 아니므로 `plan 없음`과 cleanup 결과를 별도 row로 보고한다.
+- T4/T5 보강 테스트가 구현성 파일을 수정해야 하면 root main 직접 커밋 대신 target branch 또는 임시 impl branch에서 커밋 후 merge한다.
+- commit-ready pending merge라도 staged 구현성 파일이 `.agents/`, `.claude/`, `.gemini/`, `app/`, `frontend/`, `scripts/`, `tests/`에 있으면 `commit.ps1` guard를 우회하지 않는다. 특히 child repo mirror sync merge는 root에서 닫지 않는다. `ROOT_GUARD_BLOCKED_PENDING_SYNC_MERGE` evidence를 남기고 보존/abort 후 ff-only 복구 절차, upstream sync 재생성, remote fast-forward 수신 evidence로만 전환한다. sync trigger 전에는 `git fetch origin` + `git rev-list --left-right --count HEAD...origin/main`으로 `ahead-only`, `behind-only`, `diverged`, `equal`을 분류한다. `ahead-only`(`left>0 && right=0`, `behind=0`)일 때만 push/dispatch 후보이며, `diverged`(`left>0 && right>0`)는 push-first 금지 및 `DOWNSTREAM_DIVERGED_PUSH_BLOCKED`다. ff-only 불가능/권한 문제의 `NON_FF_SYNC_BLOCKED`와 diverged 상태의 `DOWNSTREAM_DIVERGED_PUSH_BLOCKED`는 서로 다른 blocker로 보고한다.
+
+## Git Guard Session Gate
+
+- helper discovery는 `source: skill preflight` evidence로 기록한다. 사용자가 언급하지 않은 `common/tools`, helper discovery, git guard 조건을 "사용자 조건" 또는 "사용자 요청"으로 표현하지 않는다.
+- helper root 탐색 순서: (1) target repo-local `common\tools`, (2) wtools canonical `D:\work\project\service\wtools\common\tools`.
+- child repo cwd에서 repo-local `common\tools`가 없어도 wtools canonical `enable-git-guard.ps1`를 찾았으면 helper-first preflight를 계속한다. child project에 `common/tools` 스크립트를 복사하지 않는다.
+- 0단계 루트 브랜치 자동 전환 또는 merge 관련 git mutation 전에 발견된 helper root의 `enable-git-guard.ps1 -Action enable-session`을 실행한다.
+- 이어서 같은 helper root의 `enable-git-guard.ps1 -Action status`로 현재 세션 PATH가 helper root를 앞세우고 `git`이 해당 helper root의 `git.cmd`를 해석하는지 확인한다.
+- status read-back에서 `GitCommand`가 wtools canonical helper 사용 시 `D:\work\project\service\wtools\common\tools\git.cmd`를 가리키는지 확인한다.
+- repo-local helper와 wtools canonical helper가 모두 없거나 guard entrypoint가 없으면 `helper_unavailable` fallback으로 전환한다. helper가 발견됐는데 session 활성화/상태 확인이 실패하면 `GIT_GUARD_NOT_ACTIVE`로 중단한다.
+- explicit dirty-ignore 지시가 있고 canonical helper discovery가 통과하면 root dirty는 blocker가 아니라 `ignored_dirty` evidence로 기록하고, manual fallback 요구 없이 merge-test checklist를 계속한다.
+- guard는 root worktree의 `checkout main` 예외를 막지 않지만, linked worktree에서 `checkout main`/`switch main`을 차단해야 한다. 이 불변조건을 우회하기 위해 `git.exe`를 직접 호출하지 않는다.
+
+## helper_unavailable fallback 계약
+
+- helper가 있으면 helper-first다. repo-local 또는 wtools canonical `merge-test-preflight.ps1`, `merge-test-cleanup.ps1`, `enable-git-guard.ps1` evidence를 우선 사용한다.
+- `helper_unavailable`은 repo-local helper 부재가 아니라 wtools canonical helper discovery까지 실패한 경우에만 허용한다.
+- canonical helper가 발견되면 direct read-back fallback으로 가지 않고 helper-first preflight를 수행한다.
+- helper가 없는 downstream repo에서는 `helper_unavailable` evidence를 남기고 직접 read-back checklist를 수행한다: `root branch main`, `MERGE_HEAD 없음`, `git status --short`, `branch/worktree 존재`, `worktree-owner 일치`, `impl worktree clean`, `target commit hash`.
+- `explicit override`가 없으면 helper_unavailable fallback merge는 proceed하지 않는다.
+- `explicit override`가 있고 직접 read-back checklist가 모두 통과하면 next action을 `proceed_with_manual_fallback`으로 기록할 수 있다.
+- fallback에서도 broad git add, `git reset --hard`, `git clean -fd`, broad `git restore`는 금지한다.
+- root untracked unrelated 파일은 merge blocker가 아니라 `ignored_dirty` evidence로만 남긴다.
+
+## Stash 안전 계약
+
+Stash는 merge-test/{scope}/{timestamp} tag로 push, ref는 git stash list 매칭으로 확정한다.
+apply 성공 조건: LASTEXITCODE -eq 0 AND unmerged(UU|AA|DD) 0-hit. 조건 만족 시에만 drop.
+PowerShell stash@{n} literal은 반드시 따옴표로 감싼다. 기본형 git stash pop 금지.
+stash 실패 시 머지 커밋은 보존한다. git reset / git merge --abort 금지.
+merge --abort는 merge conflict에만 사용한다.
+상세 계약 및 실수 시 fsck 복구 절차: [_recipes.md](./_recipes.md) 참조.
+
+## 실패 상태 전이 계약
+
+| 실패 유형 | 루트 작업 트리 상태 | plan/todo 상태 | 다음 iteration 입력 |
+|----------|----------------------|----------------|---------------------|
+| `merge conflict` | root는 `git merge --abort`로 clean state 복귀 후 owner worktree resolve로 전환 | `머지대기` 유지 + conflict continuation ledger | 충돌 파일 목록, owner branch/worktree, retry command, 부모 plan 경로 |
+| `ROOT_STASH_APPLY_FAILED`, `STASH_APPLY_FAILED`, `STASH_DROP_FAILED` | 머지 커밋 보존 + stash ref 유지 가능 | `수정필요` | stash ref, 실패 단계, 부모 plan 경로 |
+| `frontend build/check`, `T4/T5` 실패 | 머지 커밋 롤백 후 워크트리 보존 | `머지대기` 유지/복구 | 실패 명령, 로그 근거, 재시도 대상 테스트 |
+| `frontend build lock/permission` | 머지 커밋 롤백 후 워크트리 보존 | `머지대기` 유지/복구 | 실패 명령, 잠금/권한 로그(`EPERM`, `Access is denied`), 잠긴 경로, `restart-frontend --public` 재현 여부 |
+| `frontend dependency failure` | 머지 커밋 롤백 후 워크트리 보존 | `머지대기` 유지/복구 | 실패 명령, 누락 의존성 로그(`vite.cmd`, module/package not found), `Test-Path frontend\\node_modules\\.bin\\vite.cmd` 결과 |
+| `MERGE_LOCK_TIMEOUT` | 머지 커밋 미발생 (acquire 단계에서 중단) | `머지대기` 유지 또는 구성/인터럽트 evidence 기록 | lock holder runner_id, 대기 시간, configured timeout, 부모 plan 경로 |
+| `MERGE_LOCK_UNAVAILABLE` | 머지 커밋 미발생 (Redis/lock service unavailable) | `머지대기` 유지 + hard stop | Redis 연결 오류, lock service 상태, 부모 plan 경로 |
+
+`수정필요`는 수동 종료 딱지가 아니라 `/implement`가 다음 iteration에서 읽을 continuation anchor다. 다만 frontend build/check와 T4/T5처럼 post-merge 검증 단계에서 실패한 경우는 구현 후보 자체를 `수정필요`로 낮추지 않는다. plan/todo 상태는 `머지대기`로 유지하거나 복구하고, 실패 명령/로그/재시도 대상만 continuation anchor로 남긴다.
+`MERGE_LOCK_TIMEOUT`은 정상 실패 상태가 아니다. 기본 timeout은 24시간이며, WAITING 로그가 이어지는 동안은 정상 대기 업데이트로 취급한다. exit 2는 비정상 인터럽트, 잘못된 timeout 구성, lock runner 오류 evidence가 있을 때만 continuation anchor로 남긴다.
+
+## 실행 단계
+
+### 0단계: 루트 브랜치 자동 전환 (필요 시)
+
+원본 프로젝트 루트 브랜치를 확인한다. `main`이면 1단계로 진행한다.
+`main`이 아니면 `stash push -> checkout main -> stash apply -> stash drop` 절차로 자동 전환한다.
+실패 코드: `ROOT_STASH_PUSH_FAILED` / `ROOT_STASH_REF_DUPLICATE` / `ROOT_CHECKOUT_FAILED` / `ROOT_STASH_APPLY_FAILED` / `ROOT_STASH_APPLY_PARTIAL` / `ROOT_STASH_DROP_FAILED`
+apply 성공 + conflicts 0-hit 조건 미충족 시 drop 금지. stash 실패 시 머지 커밋 보존.
+PowerShell 의사코드 및 예시 로그: [`_recipes.md`](./_recipes.md) '0단계 루트 브랜치 자동 전환 의사코드' 참조.
+
+### 0.5단계: pending merge owner classification gate
+
+0단계에서 원본 프로젝트 루트가 `main`임을 확정한 직후, 1단계 plan 정보 추출 전에 루트의 pending merge 잔류 상태를 확인한다. linked worktree에서는 `.git`이 디렉터리가 아니라 file일 수 있으므로 `MERGE_HEAD` 경로는 문자열로 조립하지 않고 반드시 `git rev-parse --git-path MERGE_HEAD`로 얻는다.
+
+`classify-pending-merge` 계약:
+- `MERGE_HEAD` 존재 자체를 final abort 사유로 닫지 않는다. 먼저 helper preflight JSON을 사용하고, helper가 없으면 `helper_unavailable` direct read-back으로 `git rev-parse --git-path MERGE_HEAD`와 `git status --porcelain=v1` 상태를 분류한다.
+- `git status --porcelain=v1` 결과에 `UU`, `AA`, `DD`, `AU`, `UA`, `DU`, `UD` unmerged marker가 하나라도 있으면 `PENDING_MERGE_DETECTED`를 owner classification gate로 다룬다. `merge_head`, `unmerged_paths`, `merge_head_branches`, `owner_guess`, `next_action`을 ledger에 남기고 `resolve-current` 또는 `resolve-foreign`으로 전환한다.
+- current target merge conflict면 root에서 `git merge --abort`로 clean state를 복구한 뒤 current target worktree에서 `git merge main`을 실행해 resolve iteration을 만든다.
+- foreign pending merge면 `MERGE_HEAD` owner branch/worktree를 찾아 그 owner의 `/merge-test`를 먼저 수행한다.
+- owner를 찾지 못하면 `planless conflict rescue` ledger를 생성하고 현재 repo 상태, `MERGE_HEAD`, unmerged paths, 재개 명령을 남긴다. 이것도 final stop이 아니라 `retry` 대기 상태다.
+- unmerged marker가 없고 `MERGE_HEAD`만 남아 있으면 commit-ready pending merge로 분류한다. 현재 owner의 merge임을 확인할 수 있고 staged 구현성/mirror path가 없을 때만 직접 `git commit`을 호출하지 말고 `D:\work\project\tools\common\commit.ps1`로 merge commit을 마무리한 뒤 1단계로 계속한다. staged `.agents/.claude/.gemini`가 있으면 owner 여부와 무관하게 root에서 닫지 않는다.
+- commit-ready이지만 owner를 판별할 수 없으면 즉시 final abort로 닫지 않는다. 현재 root, `MERGE_HEAD`, `git status --porcelain=v1` 요약을 보고하고 owner 확인 또는 선행 merge-test 완료를 대기한다.
+- 사용자가 `계속`, `멈추지마`, `머지 중 멈추지 마`, `머지해`를 명시한 세션에서는 conflict/pending merge를 resolve iteration으로 라우팅한다. 대기 중에는 진행 업데이트와 retry command를 남긴다.
+
+```powershell
+$mergeHead = git rev-parse --git-path MERGE_HEAD
+if (Test-Path $mergeHead) {
+  $pendingStatus = git status --porcelain=v1
+  $unmerged = $pendingStatus | Select-String '^(UU|AA|DD|AU|UA|DU|UD)\s'
+  if ($unmerged) {
+    Write-Warning "PENDING_MERGE_DETECTED: root has unresolved unmerged entries. Classify owner and route to resolve-current or resolve-foreign."
+    exit 1
+  }
+
+  Write-Warning "classify-pending-merge: MERGE_HEAD exists without unmerged entries; treat as commit-ready or transient pending state."
+  Write-Warning "If this merge belongs to the current owner and has no protected staged paths, finish it via D:\work\project\tools\common\commit.ps1. If staged .agents/.claude/.gemini exists, preserve/abort and require upstream sync regeneration or remote fast-forward receive evidence."
+}
+
+$stashRef = Join-Path (Get-Location) ".merge_test_stash_ref"
+if (Test-Path $stashRef) {
+  Write-Warning "warning: .merge_test_stash_ref remains from a previous /merge-test. Check whether the stash is still valid before manual cleanup."
+}
+```
+
+unmerged marker가 남은 `MERGE_HEAD`는 다른 plan의 incomplete merge가 현재 merge commit에 섞일 수 있으므로 root에서 commit하지 않는다. 대신 owner classification evidence를 남기고 current/foreign owner resolve로 넘긴다. commit-ready 또는 transient pending merge는 분류/대기/owner 확인 대상이며, `.merge_test_stash_ref` 잔류는 stash 유효성 확인이 필요한 warning이다.
+
+### 1단계: plan 정보 추출
+
+plan 헤더에서 다음을 읽는다:
+```
+> branch: impl/{slug}
+> worktree: .worktrees/impl-{slug}
+> worktree-owner: {parent_plan_path}
+```
+
+slug, branch명, worktree 경로를 변수로 저장.
+
+**plans-aware 문서 루트(`Resolve-DocsCommitRoot`/`_path-rules.md` helper 기준):**
+- 공통 plan 파일은 `.worktrees/plans/docs/plan/`을 canonical 경로로 사용한다.
+- `반영일시`/`머지커밋` Edit 대상은 plans 워크트리 내 절대경로 사용
+- Edit 후 plans lineage worktree(`.worktrees/plans` 또는 `origin/plans` descendant sync worktree)에서 `Resolve-DocsCommitRoot` 반환 cwd로 이동하고 `Resolve-DocsCommitCandidates` 반환 파일만 `git add`한 뒤 `git commit -m "chore: {slug} 머지 완료 기록"`을 수행한다. push는 literal `origin plans`가 아니라 현재 docs commit root가 추적하는 upstream으로만 진행하고, root `main`/일반 feature branch면 중단한다.
+- `git add -A`는 plans 워크트리에서도 금지한다.
+
+### 1.1단계: 부모 계획서(owner) 식별
+
+- 현재 파일이 `_todo.md`/`_todo-N.md`이면 `> 계획서:` 링크를 절대경로로 해석하여 `parent_plan_path`로 저장
+- 대표 plan/단일 plan이면 현재 파일 절대경로를 `parent_plan_path`로 사용
+- 부모 경로를 확정할 수 없으면 즉시 중단
+
+### 1.2단계: worktree 소유권 검증
+
+- `> worktree-owner:` 있으면: 쉼표 split+trim 후 `parent_plan_path` 포함 여부 확인 (대소문자/슬래시 무시). 불포함 시 중단.
+- `> worktree-owner:` 없으면(레거시): `{plan경로}/**/*.md`에서 동일 branch/worktree로 부모 역추적. 불일치 시 중단. 일치 시 `> worktree-owner:` 보강 기록 + 즉시 커밋(`commit "chore: worktree-owner 기록"`).
+
+### 머지 전 게이트 체크리스트 (1.5~1.8단계)
+
+| 게이트 | 트리거 조건 | 통과 조건 | 실패 시 동작 |
+|--------|------------|-----------|-------------|
+| T3 검증 (1.5) | plan에 T3 체크박스 있음 | `[x]` 완료 | `[ ]` → 중단. fix: plan + 스킵만 체크 → 경고 + y/N |
+| fix: 재발 경로 (1.6) | 파일명 `_fix-` 또는 제목 `fix:` | Phase R 섹션 + 미방어 0건 | Phase R 없음 → 경고 + y/N. 미방어 남음 → 경고 + y/N |
+| T4/T5 Glob 재검증 (1.7) | plan에 T4/T5 `해당 없음` 표기 | Glob 0-hit | 1개 이상 → 해당 없음 거부, TC 자동 작성 후 실행 |
+| 금지어 체크 (1.8) | fix: plan 머지 커밋 메시지 | 금지어 미포함 | 금지어 포함 → 경고 후 대체 |
+
+fix 금지어: `근본 수정`, `근본 해결`, `완전 해결`, `최종 수정`, `영구 수정` → `N개 경로 방어 완료`로 대체.
+T4/T5 Glob 자동 복구: `> T4 해당 없음:` 블록쿼트 삭제 + TC 작성 + 실행 + 체크 (중단 없음 — dev-runner 파이프라인 호환).
+mock 기반 파일(`tests/**/*e2e*`) 발견 시 Read로 확인: AsyncMock/MagicMock 기반이면 T3(integration) 재분류, 실서버/Playwright면 T4 실행.
+
+### T4/T5 live contract classification
+
+T4/T5는 파일 존재나 pytest pass만으로 완료 처리하지 않는다. candidate file은 반드시 Read로 source를 확인하고 아래 표로 분류한다.
+
+| 후보 패턴 | 계층 판정 | closeout 동작 |
+|-----------|-----------|---------------|
+| `pytest.mark.http` + `from fastapi.testclient import TestClient` 또는 `TestClient(` 단독 | T3 | T5 evidence가 아니다. T5 체크박스 `[x]` 금지, 필요 시 T3 재분류 |
+| `pytest.mark.e2e` + `page.route("**/*")` 또는 `page.route('**/*')` 전체 route mock | T3 | T4 evidence가 아니다. T4 체크박스 `[x]` 금지, `T4_MOCK_ONLY_DETECTED` |
+| `pytest.mark.e2e` + `pytest.mark.http_live` + no full-route mock | T4 | live readiness evidence 이후 T4 실행 가능 |
+| `pytest.mark.http_live` + `requests`/`httpx` localhost API 접근 | T5 | live readiness evidence 이후 T5-http_live 실행 가능 |
+
+1.7단계 mock-only detector:
+- T4 후보 파일을 Read한다. `page.route("**/*")` 또는 `page.route('**/*')`가 있고 `pytest.mark.http_live`가 없으면 `T4_MOCK_ONLY_DETECTED` blocker로 기록한다.
+- T5 후보 파일을 Read한다. `from fastapi.testclient import TestClient` 또는 `TestClient(` 단독 사용이 있고 `pytest.mark.http_live`가 없으면 `T5_TESTCLIENT_ONLY_DETECTED` blocker로 기록한다.
+- blocker 발생 시 해당 T4/T5 체크박스를 `[x]`로 올리지 않는다. live test 추가 또는 T3 재분류를 요구한다.
+- feature area 단위 live smoke 원칙: T4 live file은 plan 단위가 아니라 화면/feature area 단위로 재사용한다. 기존 live smoke가 있으면 같은 파일에 시나리오를 추가하고, 없으면 새 live smoke 파일을 만든다. live smoke가 없고 mock-only만 존재하면 T4 완료가 아니라 `T4_MOCK_ONLY_DETECTED` 또는 `T4_LIVE_SMOKE_MISSING`으로 남긴다.
+
+### 1.9단계: 동일 부모 배치 대상 수집 (_todo-N / 다중 프로젝트 공통)
+
+> **attach 모드 비포함**: 배치 수집은 `parent_plan_path` 단일 기준. attached plan은 배치 자동 포함 안 됨.
+
+- 현재 입력이 대표 plan(`*_todo-N.md` 아님)이면 1.9 시작 전에 `> **실행 TODO:**` 또는 sibling `_todo-*.md`를 enumerate한다.
+- `완료`/archive 외 sibling `_todo` 중 `머지대기` 미만 상태가 하나라도 남아 있으면 `TODO_COMPLETENESS_NOT_READY`로 중단한다.
+  - 이 경우 attach owner-set 미준비(`OWNER_SET_NOT_READY`)와 구분한다.
+  - 대표 plan 전체 완료로 말하지 않고 `현재 target 머지 보류, 남은 _todo N개` 형식으로만 보고한다.
+
+- **수집 기준**: `> **실행 TODO:**` 링크 또는 `{plan경로}/**/*_todo*.md` 스캔 → `> 계획서:`가 같은 sibling 후보 → `> branch:` + `> worktree:` 있는 파일만 채택
+- **채택 조건**: `> 대상 프로젝트:`/`> 테스트명령:`/`> 선행조건:`/`> 실행순서:` 파싱. 선행조건 미완료 후보 제외 + 경고 출력
+- **실행 순서**: `실행순서(N)` 오름차순 (child → parent). 동일 N/누락 시 현재 파일 우선. 하나라도 실패 시 이후 중단
+
+### 1.95단계: merge turn lock 획득 (대기 허용)
+
+프로젝트에 `scripts/plan_runner/merge_lock_cli.py`가 있고 `> 대상 프로젝트:`가 monitor-page(또는 merge_lock_cli.py 존재 프로젝트)인 경우에만 실행한다. wtools 자체 plan 머지 시에는 skip + 경고로 넘어간다.
+
+```powershell
+# runner_id: manual-{YYYYMMDDHHmmss}-{pid}-{slug}
+$timestamp = Get-Date -Format "yyyyMMddHHmmss"
+$pid = [System.Diagnostics.Process]::GetCurrentProcess().Id
+$slug = # parent_plan_path에서 YYYY-MM-DD_ 제거한 파일명 stem
+$runner_id = "manual-$timestamp-$pid-$slug"
+
+$merge_lock_cli = "{project_root}/scripts/plan_runner/merge_lock_cli.py"
+$lock_acquired = $false
+
+if (Test-Path $merge_lock_cli) {
+  Write-Host "[merge-test] merge turn lock 획득 시도: $runner_id"
+  # 이 호출은 큐 대기 형태로 블로킹된다 (자기 차례까지 BRPOP 대기)
+  # stderr에 WAITING ... 라인이 5초마다 출력됨 — 사용자에게 그대로 전달
+  if (-not $env:MERGE_TEST_LOCK_TIMEOUT) { $env:MERGE_TEST_LOCK_TIMEOUT = "86400" }
+  python "{project_root}/scripts/plan_runner/merge_lock_cli.py" acquire $runner_id --timeout $env:MERGE_TEST_LOCK_TIMEOUT
+  $lockExitCode = $LASTEXITCODE
+
+  if ($lockExitCode -eq 0) {
+    Write-Host "[merge-test] lock 획득 완료: $runner_id"
+    $lock_acquired = $true
+  } elseif ($lockExitCode -eq 2) {
+    # timeout — 비정상 케이스 (정상 대기는 24h 범위에서 WAITING으로 유지됨)
+    Write-Host "MERGE_LOCK_TIMEOUT: acquire timeout after configured 24h wait or abnormal interruption — do not classify normal WAITING as failure."
+    exit 1
+  } elseif ($lockExitCode -eq 3) {
+    # redis 미연결 — lock-less merge 금지
+    Write-Host "MERGE_LOCK_UNAVAILABLE: REDIS_UNAVAILABLE — lock 없이 merge를 진행하지 않습니다."
+    exit 1
+  }
+} else {
+  Write-Host "[merge-test] merge_lock_cli.py 없음 — lock 스킵 (wtools 등 non-monitor-page 프로젝트)"
+}
+```
+
+**중단 금지 계약**: front runner가 살아있는 동안 정상 대기(WAITING 로그 출력)는 24시간 대기 범위의 진행 업데이트이며 종료 사유가 아니다. 사용자의 명시적 인터럽트(Ctrl+C 등) 없이는 이 대기를 임의로 중단하지 않는다. WAITING 로그가 출력되는 것은 정상 동작이며, 큐에서 차례가 오면 자동으로 진행된다. Redis unavailable은 lock-less success 경로가 아니라 `MERGE_LOCK_UNAVAILABLE` hard stop 또는 사용자 승인 필요 상태다.
+
+**Corrective action approval boundary**
+- merge/revert/delete 전 current action class와 approval evidence를 출력한다. action class는 `merge`, `data_cleanup`, `feature_rollback`, `db_mutation`, `workflow_rule_change` 중 하나 이상으로 분류한다.
+- `git revert`, merge commit 되돌리기, 기능 경로 삭제, scheduler 경로 삭제는 read-only preview와 별도 기능 롤백 승인 후에만 수행한다.
+- pre-mutation preview는 mutation 전에 `요청 해석`, `affected commits/files`, `실행할 작업`, `실행하지 않을 작업`, `승인 근거`를 먼저 산출한다.
+- `TrackingItem id=5 삭제` 같은 특정 DB item 조치는 `data_cleanup`으로 분리하고, main에 이미 들어간 corrective commit을 되돌릴 때도 그 revert 자체를 새 `feature_rollback` mutation class로 보고한다.
+- `정리`, `재발 방지`, `cleanup` 같은 일반 표현만으로 `feature_rollback`을 승인한 것으로 보지 않는다.
+
+**product-surface post-merge evidence gate**
+- `completion-scope: product_surface` plan은 main 병합 후 product surface path/read-back(`app/`, `frontend/`, `backend/`, `src/`, `packages/`, `services/`, `common/tools/`) evidence를 확인한 뒤 완료 보고한다.
+- evidence가 `scripts/scratch/`, `scratch/`, `tmp/`, `private/`, `.private/` 같은 scratch/private utility뿐이면 `non_product_only`로 target-local blocked 처리하고 완료 보고를 금지한다.
+- product surface를 자동 추출할 수 없는 internal-only/helper-only plan은 `unknown`/`unspecified`로 남기고 기존 완료 계약 또는 explicit acceptance evidence로만 닫는다.
+
+### 2단계: 머지 실행
+
+1.9단계에서 수집한 배치 대상(`merge_targets`)을 순서대로 반복 처리한다.
+
+**각 대상별 cwd 결정** (`> 대상 프로젝트:` 기반, 워크트리 밖):
+- `_todo-N.md`에 `> 대상 프로젝트:`가 있으면 해당 프로젝트 루트로 전환
+- 없으면 기존 규칙: wtools 내부 → wtools 루트, 외부 → 해당 프로젝트 루트
+
+각 대상 머지 전에 아래 preflight를 실행한다:
+
+**preflight 변수:**
+- `$branchDeltaFiles` = `git diff --name-only main...{target.branch}` (service_lock 판정 기준)
+- `$branchFiles` = `git ls-tree -r --name-only {target.branch}` (untracked overwrite 판정 기준)
+- `$serviceLockTargets` = `$branchDeltaFiles | Where-Object { 민감경로 -contains $_ }` (민감경로: `scripts/services/service_run.py`, `scripts/service_run.py`)
+- `$runningServices` = `Get-Service MonitorPage-Admin,MonitorPage-Public | Where Status -eq Running`
+- `$collision` = `git ls-files --others --exclude-standard | Where { $branchFiles -contains $_ }`
+
+**판정:**
+- `$serviceLockTargets ≥1` AND `$runningServices ≥1` → `MERGE_PRECHECK_WARN[service_lock]` + `Read-Host "...? (y/N)"`. 거부 시 `MERGE_PRECHECK_ABORTED[service_lock]`. 승인 시 계속. (severity: WARN, 2026-04-24 변경)
+  권장 대응(강제 아님): `nssm stop MonitorPage-Admin`, `nssm stop MonitorPage-Public`. 현재 세션에서 nssm stop / Stop-Service / taskkill 우회 금지.
+- `$serviceLockTargets ≥1` AND `$runningServices = 0` → service_lock 사유로 중단 안 함
+- `$collision ≥1` → `MERGE_PRECHECK_FAILED[untracked_overwrite]` 즉시 중단. 경로 최대 20개 출력. 자동 삭제/이동 금지.
+- `$collision = 0` → 다음 단계로 진행한다.
+
+**실패 분류 규칙:**
+- `service_lock`은 **머지 직전** `scripts/services/service_run.py` 또는 `scripts/service_run.py` unlink/overwrite 위험만 뜻한다. frontend build cache, `.vite`, `.svelte-kit`, preview artifact 잠금은 여기에 포함하지 않는다.
+- `frontend build lock/permission`은 **머지 후 frontend build 또는 `restart-frontend --public` 단계**에서 `EPERM`, `Access is denied`, 잠긴 output/cache 경로가 보일 때 사용한다.
+- `frontend dependency failure`은 `frontend\\node_modules\\.bin\\vite.cmd` 누락, module/package not found, install 손상처럼 의존성 복구가 필요한 경우에 사용한다. 이 경우를 `service_lock`으로 오분류하지 않는다.
+
+
+
+**루트(main) dirty 처리 — stash-merge-selective-restore:**
+
+| 단계 | 동작 | 실패 코드 |
+|------|------|----------|
+| push | `git stash push --include-untracked -m merge-test/{branch}/{ts}` | `STASH_PUSH_FAILED` |
+| ref | `git stash list | Select-String tag` → `stash@{n}` 추출. 중복 시 | `STASH_REF_DUPLICATE` |
+| merge | `git merge {branch} --no-ff -m "merge: ..."` (owner set 시 slug 목록 포함) | — |
+| restore | tracked: `git restore --source=$stashRef --worktree -- {path}` | `STASH_APPLY_FAILED` |
+| restore | untracked: `git restore --source="$stashRef^3" --worktree -- {path}` | `STASH_APPLY_FAILED` |
+| conflict? | `git status --porcelain | Select-String '^(UU|AA|DD)'` 0-hit 확인 | `STASH_APPLY_PARTIAL` |
+| drop | `git stash drop "$stashRef"` (apply 성공 + conflicts 0-hit 시에만) | `STASH_DROP_FAILED` |
+
+stash 실패 시 머지 커밋은 보존한다. git reset / git merge --abort 금지.
+skipped residue는 quarantine diff/log로 기록한다.
+상세 의사코드: [`_recipes.md`](./_recipes.md) '2단계 stash-merge-selective-restore' 참조.
+
+**stash lifecycle closeout (필수):**
+- `/merge-test`가 `stash push`, `stash apply`, `stash pop`, `stash-pop resolve`, selective restore 중 하나라도 수행하면 `$RecoveryStashes` 또는 `.merge_test_stash_ref`를 final summary까지 보존한다.
+- `stash pop` 예외 경로는 반드시 `stash ref`, `apply/pop result`, `conflict count`, `drop result`, `git stash list` read-back을 남긴다.
+- apply/pop 성공 + conflict 0-hit + drop 성공이 확인되지 않으면 stash ref를 보존하고 `STASH_LIFECYCLE_INCOMPLETE` 또는 기존 `STASH_APPLY_FAILED`/`STASH_DROP_FAILED` blocker로 Phase Z를 닫는다.
+- `git stash list`에 `codex-*`, `merge-test/*`, `$RecoveryStashes` 항목이 남아 있으면 `완료`가 아니라 `남은 일` 표에 owner와 다음 명령을 남긴다.
+- stash evidence 없이 root dirty 복구를 완료로 축소하지 않는다.
+
+**post-merge protected dirty repair 계약:**
+- `/merge-test` 진입 시 `git status --short` 스냅샷을 `$PostMergeBaseline`으로 기록한다.
+- post-merge 검증 중 코드/테스트 수정 의도가 감지되면 dirty를 만들기 전에 `impl/post-merge-{slug}` worktree/branch로 선제 라우팅한다. 반응형 repair는 사후 안전망이고 정상 흐름은 선제 라우팅이다.
+- post-merge 단계에서 `current dirty - $PostMergeBaseline` 차집합으로 새로 생긴 dirty를 판정한다.
+- main root의 protected path(`app/`, `frontend/`, `scripts/`, `tests/`, `.agents/`, `.claude`)가 새로 dirty가 되면 `ROOT_PROTECTED_DIRTY_CREATED`를 failure final이 아니라 repair trigger로 취급한다.
+- 이 repair trigger는 post-merge 중 생긴 dirty의 사후 처리 규칙일 뿐, child repo `.agents`/`.claude`/`.gemini` mirror 파일을 root에서 직접 edit/commit해도 된다는 허가가 아니다.
+- monitor-page 같은 downstream mirror 반영은 wtools 원본 변경 후 sync commit, remote fast-forward 수신, 또는 downstream read-back evidence로만 검증한다.
+- wtools 원본 skill/agent 변경 후 downstream sync evidence가 필요하면 source repo에서 `git fetch origin` + `git rev-list --left-right --count HEAD...origin/main`을 먼저 실행한다. `ahead-only`(`left>0 && right=0`, `behind=0`)일 때만 `git push origin main` 또는 GitHub Actions `sync-skills.yml` `workflow_dispatch`를 시도한다. `diverged`(`left>0 && right>0`)이면 push-first 금지이며 `DOWNSTREAM_DIVERGED_PUSH_BLOCKED`로 중단한다. 성공 시 GitHub Actions run id, downstream matrix job id, downstream sync commit hash, receiver `origin/main:<path>` read-back을 evidence로 남긴다. push/dispatch가 실패하거나 권한이 없으면 `DOWNSTREAM_SYNC_TRIGGER_FAILED`로 중단하고, `DS evidence 대기` 같은 무기한 상태로 종료하지 않는다.
+- repair trigger 발생 시 해당 dirty path만 `impl/post-merge-{slug}` worktree/branch로 옮겨 커밋하고, main으로 merge한 뒤 Phase Z evidence에 `post-merge repair branch`, `repair commit`, `final merge commit`을 기록한다.
+- `main에 먼저 dirty 작성 -> 나중에 impl/post-merge branch 사후 생성` 순서는 금지 사례로 설명만 하고 끝내지 않는다. 이 순서가 감지되면 자동 repair acceptance case로 처리한다.
+
+실제 main merge 성공 직후 `git rev-parse --short HEAD` / `Get-Date "yyyy-MM-dd HH:mm"`로 해시+시각을 추출하여
+target 헤더의 `> 상태:` 바로 아래에 `> 반영일시:` + `> 머지커밋:` 두 줄을 Edit으로 삽입한다.
+- `머지커밋`의 canonical source는 실제 merge commit evidence다. impl 브랜치 마지막 커밋이나 중간 merge hash를 재사용하지 않는다.
+- Phase Z cleanup, TODO/DONE 보정, archive metadata 보정처럼 merge 이후 main HEAD를 이동시키는 docs cleanup commit은 `> 후속정리커밋:`으로 별도 기록한다.
+
+**머지 충돌 시:**
+1. root에서 `git merge --abort`를 실행해 clean state를 복구한다.
+2. 충돌 파일 목록, `MERGE_HEAD`, owner branch/worktree guess, retry command를 conflict continuation ledger에 남긴다.
+3. current target conflict면 현재 대상 worktree에서 `git merge main`을 실행하고 resolve iteration을 진행한다.
+4. foreign pending merge면 MERGE_HEAD owner branch/worktree를 찾아 그 owner의 `/merge-test`를 먼저 수행한다.
+5. owner를 찾지 못하면 `planless conflict rescue` ledger를 생성하고 현재 repo 상태와 재개 명령을 남긴다.
+6. 충돌이 plans lineage ledger(`.worktrees/plans/TODO.md`, `.worktrees/plans/docs/DONE.md`) 또는 Markdown/Text docs-only이고 root dirty 보존 조건을 해치지 않는 bounded safe-doc 범위일 때만 semantic merge를 허용한다. repo root `TODO.md`는 단독 safe-doc 특례가 아니다. mixed/code conflict 또는 owner/file 경계가 불명확한 충돌도 final stop으로 닫지 않고 owner routing evidence와 retry command를 남긴다.
+
+### 3단계: 상태 전이 #1 (T4/T5 있는 경우)
+
+T4/T5 체크박스 있으면: target 헤더 + 푸터를 `> 상태: 통합테스트중`으로 Edit. 없으면 테스트 건너뜀.
+
+### 4단계: T4/T5 탐지 및 실행
+
+**T4/T5 탐지**: 각 target 문서에서 아래 패턴 확인:
+- `### Phase T4` 또는 `T4:` 체크박스
+- `### Phase T5` 또는 `T5:` 체크박스
+
+**T4/T5가 있으면:**
+
+> 실행 순서: restart-api → (worker target이면 restart) → 헬스체크 폴링 → 프론트엔드 빌드 → live readiness 재확인 → T4(e2e) → T5(http) → T5(http_live)
+
+1. **서비스 재시작** (`> 대상 프로젝트:` 기반 분기):
+   - **monitor-page**: `python "D:/work/project/tools/monitor-page/scripts/services/browser_workers.py" restart-api` 실행 후, `detect_restart_targets()` 결과에 `worker` target이 있으면 `python "D:/work/project/tools/monitor-page/scripts/services/browser_workers.py" restart`를 추가 실행한다. 실패 시 `Test-Path "D:/work/project/tools/monitor-page/scripts/services/browser_workers.py"`로 entrypoint 경로부터 확인한다.
+   - **monitor-page worker target 판정**: `app/worker/`, `app/modules/*/worker/` 변경 포함 시
+   - **monitor-page api target 판정**: `app/routes/`, `app/modules/*/routes/`, `app/modules/*/services/` 변경 포함 시
+   - **monitor-page 예외**: frontend 전용 변경이나 api-only 변경처럼 `worker` target이 비어 있으면 `restart`는 호출하지 않는다. 헬스체크는 `restart-api` 실행 뒤 api readiness 확인 용도로만 유지한다.
+   - **wtools 내부**: 해당 프로젝트의 서버 재시작 방식 사용
+   - **그 외 프로젝트**: 서비스 재시작 스킵 (Python 라이브러리 등)
+   - `_todo-N.md`에 `> 테스트명령:` 필드가 있으면 해당 명령으로 T4/T5 실행
+
+2. **API 헬스체크 폴링** (최대 2분, 5초 간격, 24회):
+   `Invoke-WebRequest "http://localhost:8001/api/v1/system/liveness"` → 200 즉시 진행.
+   24회 초과 시 `HEALTHCHECK_TIMEOUT` exit 1 (머지 커밋 유지, plan 상태 통합테스트중 유지).
+   폴링 의사코드: [`_recipes.md`](./_recipes.md) '4단계 API readiness / live readiness 폴링' 참조.
+
+3. **프론트엔드 검증 확인** (webapp-testing 스킬):
+   ```powershell
+   Set-Location "{project_root}\frontend"
+   npm run check
+   ```
+   Tier 1 `npm run check`를 기본으로 실행한다. Tier 2 조건(`vite.config.*`, `svelte.config.*`, adapter/build script, `$env/static/*`, `$env/dynamic/*`, SSR import, browser-only import, route server module, package/lockfile/dependency/plugin 변경, 직전 build 실패 이력)이 있으면 check 통과 후 `npm run build:merge-test`를 실행한다. 조건이 없으면 build를 검증 생략으로 쓰지 말고 `Tier 2 조건 미충족`으로 기록한다.
+   빌드 실패 분류:
+   - `service_lock`: 이 단계에서 쓰지 않는다. service_lock은 merge preflight 전용이다.
+   - `frontend build lock/permission`: `EPERM`, `Access is denied`, `.vite`/`.svelte-kit`/build 산출물 잠금, `restart-frontend --public`에서도 같은 권한 오류가 재현되는 경우.
+   - `frontend dependency failure`: `vite.cmd` 누락, module/package not found, `npm install` 필요 신호.
+   - `--emptyOutDir false`는 기본 merge-test 폴백이 아니다. build lock/permission을 가리기 위해 상시 사용하지 말고, 잠긴 산출물 경로가 로그로 특정된 뒤 운영자가 수동 복구 실험으로만 제한한다.
+   - `--emptyOutDir false`는 `frontend dependency failure`, `selection failure`, 일반 타입/빌드 오류를 우회하는 수단으로 사용 금지다.
+   빌드 실패 시 → 머지 롤백(`git reset --merge HEAD~1`), plan 상태 `머지대기`로 롤백, 워크트리 보존 후 **이후 단계 중단**.
+
+4. **live readiness 재확인** (첫 live T4/http_live 직전, 최대 30초, 5초 간격, 6회):
+   `Invoke-WebRequest "http://localhost:8001/api/v1/system/liveness"` → 200 즉시 진행.
+   6회 초과 시 `MERGE_TEST_FAILED[live_readiness]` exit 1. TestClient 기반 `http` 마커에는 미적용.
+   - 현재 run에서 step 1 `restart-api` 실행 로그와 step 2 `liveness polling` 200 근거가 둘 다 남지 않았으면 live T4/T5로 넘어가지 않는다.
+   - 위 근거 없이 `T4` 또는 `http_live`를 먼저 실행하려 하면 `MERGE_TEST_PROCEDURE_VIOLATION`으로 즉시 중단한다. TestClient 기반 `http` 마커에는 이 gate를 적용하지 않는다.
+   폴링 의사코드: [`_recipes.md`](./_recipes.md) '4단계 API readiness / live readiness 폴링' 참조.
+
+5. **T4 실행** (E2E 존재 시):
+   현재 run의 `restart-api` + `liveness polling` 근거가 없으면 `MERGE_TEST_PROCEDURE_VIOLATION`으로 즉시 중단한다.
+   표준: `pytest -o addopts=--capture=sys tests/e2e/ -m e2e -v`
+   명시적 파일: `python -m pytest -o addopts="--capture=sys -m e2e" {file} -v` (pytest.ini `not e2e` override 필수)
+   `0 selected` 시 marker mismatch → 1회 재시도. 재시도 후에도 0 selected → `MERGE_TEST_FAILED[selection_contract]`.
+   T4 기준: 실서버(localhost:8001) 또는 실브라우저(Playwright) 필요. TestClient/mock 기반은 T3.
+   pytest marker 명령 레퍼런스: [`_recipes.md`](./_recipes.md) '4단계 T4/T5 pytest marker 명령' 참조.
+
+### 4.x단계: explicit pytest file marker selection 계약
+
+`pytest.ini` 기본 `addopts`는 `--capture=sys -m "not http and not http_live and not integration and not e2e"`다. 따라서 명시적 파일 경로를 주더라도 파일/테스트에 `http`, `http_live`, `integration`, `e2e` marker가 있으면 기본 실행에서 deselect될 수 있다. explicit file 명령은 디렉토리명이 아니라 실제 marker 기준으로 고른다.
+
+| 대상 | 명령 |
+|------|------|
+| marker 없는 파일 | `python -m pytest -o addopts=--capture=sys {file} -v` |
+| `http` marker | `python -m pytest -o addopts="--capture=sys -m http" {file} -v` |
+| `integration` marker | `python -m pytest -o addopts="--capture=sys -m integration" {file} -v` |
+| `http_live` marker | `python -m pytest -o addopts="--capture=sys -m http_live" {file} --collect-only -q --no-header` 후 선택되면 `python -m pytest -o addopts="--capture=sys -m http_live" {file} -v` |
+| `e2e` marker | `python -m pytest -o addopts="--capture=sys -m e2e" {file} -v` |
+
+- `tests/integration/` 디렉토리라고 해서 무조건 `-m integration`을 붙이지 않는다.
+- `tests/integration/test_llm_providers_ui.py`처럼 `@pytest.mark.integration`이 있는 파일은 `-m integration` override가 필요하다.
+- `tests/integration/test_llm_profile_http.py`처럼 `@pytest.mark.http`가 있는 파일은 `-m http` override가 필요하다.
+- `tests/integration/test_api_integration.py`나 `tests/integration/test_snipe_fk_recovery_pg_integration.py`처럼 marker가 없는 direct-file integration 테스트는 plain explicit file 명령으로 선택된다.
+- explicit file 실행에서 `0 selected` 또는 전부 deselect가 나오면 `SKIP(no-match)`가 아니라 `MERGE_TEST_FAILED[selection_contract]`다. `SKIP(no-match)`은 broad marker discovery의 collect-only 결과가 0 selected일 때만 허용한다.
+
+6. **T5 실행** (HTTP 통합):
+
+   | 마커 | 기반 | 실서버 필요 | 폴링 대기 | 표준 명령 |
+   |------|------|------------|----------|----------|
+   | `http` | TestClient | 불필요 | 불필요 | `pytest -o addopts=--capture=sys -m http -v` |
+   | `http_live` | httpx + localhost | 필수 | 필수 | `pytest -o addopts=--capture=sys -m http_live -v` |
+
+   **dev-runner smoke residual 계약**:
+   - admin API 경유 `POST /api/v1/dev-runner/run` smoke는 기본적으로 disposable plan input을 사용한다. disposable input은 active `docs/plan`/`docs/archive` backlog 밖의 cleanup-owned path여야 한다.
+   - smoke 직전 baseline dirty를 repo/worktree별 exact path set으로 기록하고, smoke 종료/stop 직후 current dirty를 다시 기록한다.
+   - T5 evidence에는 `runner_id`, stream log path, stop result, baseline dirty, current dirty, `current dirty - baseline dirty` residual ledger를 함께 남긴다.
+   - 신규 dirty가 있으면 T5 success로 닫지 않는다. cleanup-owned disposable path는 exact cleanup 후 ledger를 다시 산출해야 하며, 실제 backlog plan/worktree dirty는 cleanup owner 또는 보존 owner를 선택하기 전까지 실패/대기 상태로 남긴다.
+   - 실제 backlog plan 사용은 `non_mutating=false` evidence와 residual policy가 있을 때만 허용한다. 이 경우에도 신규 dirty exact path와 cleanup owner가 없으면 완료 보고 금지.
+   - wtools 원본 skill/agent 계약 변경이 monitor-page mirror에 필요하면 downstream sync evidence가 있어야 한다. source repo에서 `git fetch origin` + `git rev-list --left-right --count HEAD...origin/main`을 먼저 실행하고, `ahead-only`(`left>0 && right=0`, `behind=0`)일 때만 `git push origin main` 또는 GitHub Actions `sync-skills.yml` `workflow_dispatch`를 시도한다. `diverged`(`left>0 && right>0`)이면 push-first 금지 및 `DOWNSTREAM_DIVERGED_PUSH_BLOCKED`다. 성공 시 run id / matrix job id / downstream sync commit hash / receiver `origin/main:<path>` read-back을 evidence로 남긴다. trigger 실패 또는 권한 부족이면 `DOWNSTREAM_SYNC_TRIGGER_FAILED`로 중단한다. sync evidence가 없으면 monitor-page T5는 실행하지 않고 `DOWNSTREAM_SYNC_EVIDENCE_MISSING`으로 중단한다. 이 문장은 mirror 직접 edit/commit 허가가 아니라 sync/read-back gate다.
+
+   `http_live`는 **본실행 전에 항상 collect-only discovery를 먼저 실행**한다: `pytest -o addopts=--capture=sys -m http_live --collect-only -q --no-header`
+   명시적 파일 경로(`http`): `python -m pytest -o addopts="--capture=sys -m http" {file} -v` (pytest.ini `not http` override 필수)
+   `http_live`는 현재 run의 `restart-api` + `liveness polling` 근거가 없으면 `MERGE_TEST_PROCEDURE_VIOLATION`으로 즉시 중단한다.
+   명시적 파일 경로(`http_live`) 1단계: `python -m pytest -o addopts="--capture=sys -m http_live" {file} --collect-only -q --no-header`
+   명시적 파일 경로(`http_live`) 2단계: collect-only에서 선택된 뒤에만 `python -m pytest -o addopts="--capture=sys -m http_live" {file} -v`
+   `restart-frontend` 계열 plan의 T5 evidence에는 `python ... browser_workers.py restart-frontend --public` 실행 근거와 그 뒤 `http_live` 결과를 함께 남긴다.
+   restart-mutating evidence는 같은 merge-test 세션에서 병렬 background task로 실행하지 않고 파일 단위로 순차 실행한다. 대상 예: `tests/test_system_processes.py -k restart_frontend`, `tests/dev_runner/test_connection_leak_http.py -k restart_frontend`, `tests/dev_runner/test_live_server_http.py::*restart_frontend*`, `tests/e2e/frontend/test_navigation.py::*restart_frontend*`.
+   stderr/stdout에 `Frontend restart lock is busy; another restart is in progress`가 있으면 제품 실패로 단정하기 전에 병렬 실행 여부를 먼저 확인하고, 실패 메타 카테고리는 `validation_concurrency`로 기록한다. 보고 메시지에는 `[Validation Concurrency Error] Concurrent restart detected. Please run these tests sequentially.` 힌트를 포함한다.
+   `Listener PID unchanged after restart (PID: ...) but frontend is healthy` 로그는 **warning-success path**다. 이 메시지가 나와도 명령 종료코드는 반드시 `0`이어야 하며, T5 evidence에서는 경고로 기록하되 실패로 취급하지 않는다.
+   `SKIP(no-match)`: marker discovery(`--collect-only`) 0 selected 시에만 허용. 명시 파일 경로가 있는데 0 selected → `MERGE_TEST_FAILED[selection_contract]`.
+   pytest marker 명령 레퍼런스: [`_recipes.md`](./_recipes.md) '4단계 T4/T5 pytest marker 명령' 참조.
+
+6. 각 target의 T4/T5 체크박스 `[ ]` → `[x]` 업데이트, Read로 반영 확인
+
+### 4.4단계: DB-direct evidence gate (Phase DB-Direct가 있는 경우)
+
+- plan/todo에 `Phase DB-Direct`가 있으면 아래 3종 evidence를 T4/T5와 별도 필수 단계로 수집한다:
+  - `실행 SQL/명령` — running DB에 직접 반영한 SQL 또는 명령
+  - `존재 확인 쿼리` — 적용 결과를 확인한 query와 출력 요약
+  - `live API 또는 runtime 결과` — DB 반영 뒤 수행한 live/runtime 검증 결과
+- 위 3종 중 하나라도 비어 있으면 상태를 `구현완료` 또는 `머지완료`로 올리지 않고 `DB-direct 대기` 또는 동등한 미완료 상태로 남긴다.
+- `merge`, `broad pytest`, `collect-only`만으로는 DB-direct/live validation 완료를 보고할 수 없다.
+
+### 4.5단계: reflect 입력용 실패 메타데이터 기록
+
+- 실패/경고 항목: `실패 명령 | 종료코드 | 카테고리(frontend-check/frontend-build/frontend-tsc/other) | 로그근거`
+- T4/T5 evidence table schema(machine-readable): target별로 `stage`, `command`, `cwd`, `result`, `exit_code`, `log_ref`, `blocker_code` 컬럼을 가진 row를 남긴다. `result` 값은 `완료`/`미실행`/`해당 없음`/`실패`만 허용한다. `stage` 최소 row는 `T4`, `T5-http`, `T5-http_live`이며 해당 없음은 `> T4 E2E 해당 없음:` 또는 `> T5 HTTP 해당 없음:` 블록쿼트와 non-empty `blocker_code`가 함께 있을 때만 완료 근거로 인정한다.
+- 완료 안내 직전: 성공/미실행 포함 실행 근거 표 (`단계 | 실행 명령 | 결과 | 근거 로그`). 결과 값은 `완료/미실행/해당 없음/실패`만 쓰고, 최소 row는 `restart-api`, `liveness polling`, `merge`, `T4`, `T5-http`, `T5-http_live`, `정리`를 모두 포함한다.
+- `Phase DB-Direct` 있으면: 근거 표에 `실행 SQL/명령`, `존재 확인 쿼리`, `live API 또는 runtime 결과` 3종 row 보존 필수.
+- 위 근거 표/3종 evidence 미보존 시 T4/T5 완료 또는 DB-direct validation 완료 선언 금지. `merge`/`broad pytest`/`collect-only`만으로는 T4/T5 evidence table을 대체할 수 없다.
+- unresolved build/check failure 잔존 시 완료 안내에 `⚠️ unresolved 검증 실패가 있어 /reflect 후속 계획 생성이 필수입니다.` 포함.
+
+**테스트 실패 시:**
+```powershell
+# 머지 커밋만 되돌리기 (HEAD~1이 머지 커밋)
+git reset --merge HEAD~1
+```
+- plan 상태 롤백: `통합테스트중` → `머지대기`
+- 현재 대상 + 미처리 대상 워크트리/브랜치 보존 (수정 후 재시도 가능)
+- 실패 로그 사용자에게 보고
+- **이후 단계 중단**
+
+### 5단계: worktree 정리
+
+배치 대상 전체가 성공한 뒤, worktree/branch를 **한 번에 정리**한다:
+
+**제거 전 필수: dirty 체크 게이트**
+
+각 target 제거 전에 main/worktree 모두 자동 흡수 없이 확인한다:
+
+- `git status --porcelain`(main) → dirty → `ROOT_DIRTY_BEFORE_REMOVE` exit 1. 자동 add/commit 금지.
+- `git -C {worktree} status --porcelain` → dirty → `WORKTREE_DIRTY_BEFORE_REMOVE` exit 1. 자동 커밋 금지.
+- clean 확인 후: `git worktree unlock {worktree}` (실패 무시) → `git worktree remove {worktree} --force` → `git branch -D {branch}`
+
+각 target 헤더에서 아래 줄 Edit으로 제거:
+```
+> branch: {target.branch}
+> worktree: {target.worktree}
+> worktree-owner: {parent_plan_path}
+```
+
+- `Phase Z` 체크박스는 worktree unlock/remove, branch 삭제, header 메타 제거가 끝난 뒤에만 `[x]`로 변경한다.
+- `main merge 시도`, `root dirty stash/apply (if needed)`, `T4/T5`, `worktree unlock/remove`, `branch 삭제`, `header meta 제거` 중 하나라도 남아 있으면 `Phase Z`는 완료가 아니다.
+- `/implement`가 남겨둔 `Phase Z` 미완료는 정상이며, merge-test가 여기서 마무리한다.
+- `/done` 또는 `auto-done` 진입 전 read-back에서 `Phase Z` 미완료 0건 + `> 머지커밋:` 실제 merge commit evidence 보존을 확인한다. `> 후속정리커밋:`이 있으면 current HEAD 또는 current HEAD로 이어지는 post-merge docs cleanup evidence와 일치해야 한다. 하나라도 어긋나면 archive 진행 금지다.
+
+### 5.5단계: merge turn lock 해제
+
+1.95단계에서 acquire가 성공한 경우(`$lock_acquired = $true`)에만 실행한다. acquire 실패/skip 시 호출 금지.
+
+머지 충돌, T4/T5 실패, stash 실패 등 **모든 실패 분기**에서도 finally 의미로 반드시 호출한다.
+
+```powershell
+if ($lock_acquired) {
+  Write-Host "[merge-test] merge turn lock 해제: $runner_id"
+  python "{project_root}/scripts/plan_runner/merge_lock_cli.py" release $runner_id
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "[merge-test] lock release 실패 (exit $LASTEXITCODE) — stale 감지로 자동 처리됩니다."
+    # release 실패는 non-blocking 경고 — 다음 acquire 시 stale 제거로 자동 복구됨
+  }
+  $lock_acquired = $false
+}
+```
+
+### 6단계: 상태 전이 #2
+
+T4/T5 phase 또는 `T4/T5 evidence table` requirement가 있는 target은 상태 전이 직전에 plan/todo 본문을 다시 읽고 target별 evidence row completeness를 검증한다. `stage`, `command`, `cwd`, `result`, `exit_code`, `log_ref`, `blocker_code` 중 하나라도 비었거나 필수 T4/T5 row가 없으면 `구현완료`로 올리지 않는다.
+
+검증 실패 row는 반드시 `failure_class`, `blocks_archive`, `blocks_other_targets`, `next_owner`를 함께 기록한다.
+- `failure_class` 허용값: `product_regression`, `contract_regression`, `test_fixture_stale`, `environment_failure`.
+- `product_regression` 또는 `contract_regression`: 현재 target의 archive는 차단하되, 다른 target 차단 여부는 `blocks_other_targets`로 별도 판단한다.
+- `test_fixture_stale` 또는 `environment_failure`: 기본값은 `blocks_other_targets=false`이며, 전체 보류/전체 중지 근거로 승격하지 않는다.
+- failure scope가 분류되기 전에는 `전체 보류`, `전체 중지`, `모두 실패` 표현을 금지하고 target-local blocked/warning으로만 남긴다.
+
+- missing/incomplete row: 상태를 `보류(t4_t5_evidence_missing)` 또는 동등한 target-local blocked 상태로 유지하고 archive 금지.
+- `result=미실행`: 상태를 `보류(t4_t5_not_run)`으로 유지하고 archive 금지.
+- `result=실패` 또는 non-empty blocker code: 상태를 `보류(<blocker_code>)`로 유지하고 archive 금지. 예: `보류(T5_CLAIM_HTTP_FIXTURE_MISSING)`.
+- `해당 없음`은 explicit 블록쿼트 사유와 non-empty `blocker_code`가 둘 다 있을 때만 통과한다.
+
+plan/todo에 `Phase DB-Direct`가 있으면 4.4/4.5 evidence 3종이 모두 있는 경우에만 아래 `구현완료` 전이를 수행한다.
+하나라도 비어 있으면 상태를 `DB-direct 대기` 또는 동등한 미완료 상태로 유지하고 완료 안내에서도 그 상태를 그대로 쓴다.
+
+각 target 헤더 + 푸터를 `> 상태: 구현완료` / `> 진행률: N/N (100%)` / `*상태: 구현완료 | 진행률: N/N (100%)*`로 Edit.
+`반영일시`/`머지커밋`은 2단계에서 이미 삽입됨 — 중복 추가 금지.
+
+### 7단계: /done 실행 (완료 처리)
+
+머지 + T4/T5 완료 후, `/done` 스킬의 SKILL.md를 읽고 **1~8단계를 동일하게** 직접 실행한다.
+
+- plan/archive 이동은 문서 위치 규칙 기반 경로(`{plan경로}`/`{archive경로}`)를 그대로 따른다.
+- `/done`의 Archive reference drift gate를 포함해 실행한다. merge-test가 archive까지 일괄 처리할 때도 이동 전 plan filename/path를 직접 가리키는 repo 내부 참조를 stale 상태로 남기지 않는다.
+- 커밋은 `commit "message"` 스크립트만 사용하고, `git commit` 직접 실행을 금지한다.
+- 완료 안내 문구는 `/done`의 고정 안내(회고 안내 + 최근 검증 실패 Q4 금지 문구)를 그대로 출력한다.
+- plans TODO 동기화까지 `/done`의 책임이다. (`.worktrees/plans/TODO.md`)
+
+### 8단계: 완료 안내
+
+```
+부모 묶음 머지 + 통합테스트 + 완료처리 완료
+parent: {parent_plan_path}  대상: {N}건  머지: {branches} → main ✅
+
+실행 근거: | 단계 | 실행 명령 | 결과(완료/미실행/해당 없음/실패) | 근거 로그 |
+(restart-api, liveness polling, merge, T4, T5-http, T5-http_live, 정리 각 row 포함)
+```
+
+T4/T5 완료 표기는 실행 근거 표에 실제 명령+결과가 있을 때만. `merge`/`broad pytest`/`collect-only`만으로 완료 선언 금지.
+미실행 단계는 `미실행`으로 명시. 정리 완료 + 상태: 구현완료 → archive.
+회고 필요 시 `/reflect`. 최근 검증 실패 있으면 실패 명령/종료코드 표 먼저 작성 + Q4 해당 없음 판정 금지.
+
+### 8.5단계: final recovery/read-back summary
+
+최종 응답 직전 아래 표를 출력한다. 하나라도 blocker면 전체 완료 표현을 금지하고 `남은 일`로 남긴다.
+
+| 항목 | 명령/evidence | 완료 조건 |
+|------|---------------|-----------|
+| root remote | `git fetch origin`, `git status --short --branch`, `git rev-list --left-right --count HEAD...origin/main`, 필요 시 `git pull --ff-only` dry evidence | `HEAD == origin/main` 또는 push/read-back 완료. `rev-list` tuple이 source of truth이며 `git status --short --branch`는 display evidence다. `diverged` remote sync tip은 push-first 또는 local merge로 닫지 않음 |
+| stash lifecycle | `git stash list` + `$RecoveryStashes`/`.merge_test_stash_ref` | agent 임시 stash 없음 또는 preserved owner/blocker |
+| service state | `Get-Service 'MonitorPage*'`, `Get-Process 'monitorpage-*'` | stop/start를 수행한 경우 Running 또는 blocked(UAC/권한/사용자 취소) |
+| staged/dirty | `git status --short`, `git diff --cached --name-status` | expected staged set만 있거나 dirty 0. root staged sync merge는 guard evidence로 분리 |
+
+`HEAD == origin/main`, `git pull --ff-only`, service Running, stash lifecycle closeout 중 하나라도 확인하지 못했으면 `완료/다 했다`로 말하지 않는다.
+
+## T4/T5 스킵 규칙
+
+포함 조건 미충족 시 Phase 생략 가능. 조건 충족인데 스킵하려면 체크박스 금지, 블록쿼트로 사유 기재:
+`> T4 E2E 해당 없음: {사유}` / `> T5 HTTP 해당 없음: {사유}`
+**금지**: "단위 테스트로 커버됨" 자의적 판단. 1.7단계 Glob 재검증으로 파일 존재 시 TC 자동 작성+실행.
+
+## worktree 미사용 시 / 환경
+
+plan에 `> branch:` 없으면 → 바로 `/done` 호출.
+**cwd**: 반드시 원본 프로젝트 루트. **루트 브랜치**: 0단계 자동 전환으로 `main` 정규화. **Windows**: 절대경로, PowerShell.
+
