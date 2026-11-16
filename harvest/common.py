@@ -328,8 +328,8 @@ def html_to_markdown(fragment: str) -> str:
     return s.strip()
 
 
-def _looks_like_skill(content: str) -> bool:
-    if len(content) < 400:
+def _looks_like_skill(content: str, min_len: int = 400) -> bool:
+    if len(content) < min_len:
         return False
     head = content[:2000]
     return (head.lstrip().startswith("---")
@@ -371,7 +371,7 @@ def extract_skillmd_from_html(html: bytes) -> tuple[str | None, str]:
                 else:
                     candidate = body
                 candidate = candidate.strip("\x00")
-                if _looks_like_skill(candidate):
+                if _looks_like_skill(candidate, min_len=120):
                     return candidate, "rsc-stream"
 
     # --- Strategy B: flight template rows + preview head -------------------

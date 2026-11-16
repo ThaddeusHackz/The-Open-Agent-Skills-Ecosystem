@@ -156,6 +156,28 @@ def harvest() -> None:
                     content = f["content"]
             except Exception as exc:  # noqa: BLE001
                 detail_meta["file_error"] = str(exc)
+        # 3) fallback: download the package zip and read SKILL.md from it
+        if content is None and detail_meta.get("download_url"):
+            try:
+                status, data = http_get(detail_meta["download_url"],
+                                        timeout=60,
+                                        max_bytes=32 * 1024 * 1024)
+                if status == 200 and data[:2] == b"PK":
+                    import io as _io
+                    import zipfile
+                    with zipfile.ZipFile(_io.BytesIO(data)) as zf:
+                        names = [n for n in zf.namelist()
+                                 if n.lower().endswith("skill.md")
+                                 and not n.split("/")[0].startswith("__")]
+                        if names:
+                            names.sort(key=lambda n: (n.count("/"), len(n)))
+                            raw = zf.read(names[0])
+                            cand = raw.decode("utf-8", errors="replace")
+                            if cand.strip():
+                                content = cand
+                                detail_meta["zip_skill_path"] = names[0]
+            except Exception as exc:  # noqa: BLE001
+                detail_meta["zip_error"] = str(exc)
         if content is None:
             return {"result": None, "meta": detail_meta}
 

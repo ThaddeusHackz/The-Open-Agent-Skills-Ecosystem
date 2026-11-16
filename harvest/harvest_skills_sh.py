@@ -304,13 +304,63 @@ def harvest() -> None:
         if status != 200:
             return {"ok": False, "error": f"HTTP {status}"}
         content, method = extract_skillmd_from_html(html)
+
+        # Fallback: the page's install command reveals the skill's own source
+        # URL — probe standard SKILL.md locations on that origin.
         if not content:
-            # keep one debug sample for extraction R&D
-            dbg = os.path.join("harvest-logs", "site_extract_debug.html")
-            if not os.path.exists(dbg):
-                os.makedirs("harvest-logs", exist_ok=True)
-                with open(dbg, "wb") as fh:
-                    fh.write(html[:600000])
+            text = html.decode("utf-8", errors="replace")
+            m = re.search(r"npx skills add (https?://[^\s`\"'<]+)", text)
+            if m:
+                base = m.group(1).rstrip("/")
+                from urllib.parse import urlparse
+                pu = urlparse(base)
+                domain = f"{pu.scheme}://{pu.netloc}"
+                probes = []
+                if pu.path and pu.path != "/":
+                    probes += [f"{base}/SKILL.md",
+                               f"{base}/skill.md",
+                               f"{base}/.well-known/{skill_id}/SKILL.md"]
+                probes += [f"{domain}/.well-known/{skill_id}/SKILL.md",
+                           f"{domain}/.well-known/{skill_id}.md",
+                           f"{domain}/SKILL.md",
+                           f"{domain}/skill.md",
+                           f"{domain}/.well-known/skill.md"]
+                seen = set()
+                sid_norm = re.sub(r"[^a-z0-9]", "", skill_id.lower())
+
+                def name_gated(cand: str) -> bool:
+                    """Generic domain paths must actually belong to this skill."""
+                    head_norm = re.sub(r"[^a-z0-9]", "", cand[:800].lower())
+                    return bool(sid_norm) and sid_norm in head_norm
+
+                for purl in probes:
+                    if purl in seen:
+                        continue
+                    seen.add(purl)
+                    id_specific = skill_id in purl or "/.well-known/" in purl
+                    try:
+                        pst, pdata = http_get(purl, timeout=25,
+                                              max_bytes=2 * 1024 * 1024)
+                    except Exception:  # noqa: BLE001
+                        continue
+                    if pst != 200 or len(pdata) < 80:
+                        continue
+                    cand = pdata.decode("utf-8", errors="replace")
+                    if not (cand.lstrip().startswith("---") or "\n# " in cand
+                            or cand.startswith("# ")):
+                        continue
+                    if not id_specific and not name_gated(cand):
+                        continue
+                    content = cand
+                    method = f"direct-url:{purl}"
+                    break
+        if not content:
+            dbg = os.path.join(
+                "harvest-logs",
+                f"site_fail_{sanitize_dirname(source + '_' + skill_id, 80)}.html")
+            os.makedirs("harvest-logs", exist_ok=True)
+            with open(dbg, "wb") as fh:
+                fh.write(html[:600000])
             return {"ok": False, "error": "no SKILL.md in page"}
         meta, body = parse_frontmatter(content)
         if not meta:
